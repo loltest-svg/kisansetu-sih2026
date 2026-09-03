@@ -2,8 +2,8 @@
 
 ## CURRENT PHASE
 
-Phase 3A — Backend Architecture & Supabase Data Design (**design only —
-no code, no schema, no Supabase**)
+Phase 3A.1 — Backend Design Amendments (**design only — no code, no
+schema, no Supabase**)
 
 ## COMPLETED
 
@@ -18,6 +18,81 @@ no code, no schema, no Supabase**)
   2C, 2D)
 - UX4G `Design.md` read completely (seven times — Phase 0, 0.5, 1, 2A, 2B,
   2C, 2D)
+- **Phase 3A.1 — Design amendments after architecture review (DESIGN
+  ONLY):**
+  - Again, **nothing was built** — five documents changed, application
+    byte-identical, no dependency, no SQL, no migration, no connection.
+  - **`OQ-1` capacity units — LOCKED.** Two independent dimensions that
+    never share vocabulary: farmer-processing capacity (farmers) and
+    procurement-quantity capacity (quintals). Columns now carry their unit
+    in the name (`daily_farmer_capacity`,
+    `daily_quantity_capacity_quintal`, `slots.farmer_capacity`). Quantity
+    is day-level only — it is a whole-day resource, so a per-slot
+    equivalent would add a dimension nothing uses. Documented per-consumer:
+    which screens, which role, which allocation input
+    (`docs/DATABASE.md` §4.3, §4.3.1).
+  - Refinement that fell out of the split: **committed vs procured
+    quantity** are different numbers and both are needed — admission must
+    use the farmer's *declared* quantity because it is all that exists at
+    booking time, reporting must use the *accepted* weight because that is
+    what happened.
+  - **`OQ-6` one active booking — LOCKED.** Global, not per-date; enforced
+    by a partial unique index over the active status set, which is atomic
+    by construction where a check-then-insert is not.
+  - **Two consequences of that invariant that had to be designed, not
+    assumed:**
+    - `EXPIRED` status plus a scheduled sweep, because a Postgres partial
+      index predicate must be `IMMUTABLE` — a date-based predicate is
+      rejected outright, so the invariant can only be expressed in
+      statuses, so something must move abandoned bookings out of the
+      active set. Without it, a farmer who books once and never arrives is
+      **locked out permanently** (logged as consistency finding C-9).
+    - `bookings.request_id` idempotency key, because a retried booking
+      after a network timeout would otherwise hit the invariant and be
+      told "you already have a booking" — true, and the wrong answer.
+  - **`FULL` — precedence defined and justified**, not just asserted:
+    `CLOSED > PAUSED > FULL > DELAYED > OPEN`, with all eight edge cases
+    worked through (`docs/DATABASE.md` §6.1–6.2). `FULL` now derives from
+    **farmer capacity only** per the locked decision; quantity exhaustion
+    is a warning, not a booking block (`OQ-13`). `FULL` is described as an
+    *availability state* rather than a member of the manual status enum —
+    the two live in different layers.
+  - **Farmer queue realtime — five approaches compared, one recommended.**
+    A per-booking anonymised projection was rejected for O(n) write
+    amplification on every call-next; RPC-only was rejected as pull-only;
+    client-side sequence arithmetic was rejected because it is exact only
+    while every departure is ahead of the caller and **fails silently**
+    when a farmer behind them cancels. Recommendation: aggregate row as the
+    realtime signal, `SECURITY DEFINER` RPC as the authoritative
+    per-farmer answer (`docs/ARCHITECTURE.md`).
+  - `centre_queue_state` renamed **`centre_live_state`** and widened to
+    carry capacity headroom, `effective_status`, `delay_reason` and a
+    monotonic `version`, so one subscription covers all ambient centre
+    state and the §6 precedence logic is encoded once, server-side, rather
+    than three times in three UIs.
+  - **Realtime surface reduced from four published tables to two**
+    (`centre_live_state`, `bookings`). `centre_status` and
+    `procurement_records` dropped — their changes already reach subscribers
+    via the aggregate or a refetch, and every published table is another
+    place a policy mistake becomes a live leak.
+  - **Cache for display, recompute for decisions** adopted as an explicit
+    rule, so the one deliberate denormalisation cannot become a
+    correctness dependency: admission recomputes capacity inside the
+    locked transaction and never trusts the cached figure.
+  - Queue position: documented *where* it runs, *what rows* it may see,
+    *what* it returns, and how RLS stays enforced — plus an anti-oracle
+    requirement that "not your booking" and "no such booking" return
+    identical errors, or the function becomes a probe for valid IDs.
+  - Status edge cases specified for Phase 3B: closed-with-bookings
+    (bookings are **not** auto-cancelled — the farmer may already have
+    travelled), paused-with-queue (check-in still allowed, calling blocked),
+    full-with-bookings (existing commitments never invalidated),
+    cancellation freeing capacity, reopening, and stale derived
+    availability.
+  - Adversarial review extended: **S-12** (`SECURITY DEFINER` oracle),
+    **S-13** (aggregate scope creep), **C-9** (permanent lockout), **C-10**
+    (retry vs duplicate), **C-11** (reassignment window). Verification plan
+    gained matching tests.
 - **Phase 3A — Backend architecture & data design (DESIGN ONLY):**
   - **Nothing was built.** No Supabase project, no dependency, no SQL, no
     migration, no policy, no connection, no credential. The only changes
@@ -637,10 +712,10 @@ no code, no schema, no Supabase**)
   `lib/demo/adminDashboard.ts`, rewritten `app/admin/*` (all 4 route
   files; no layout/nav changes — the Phase 2A route paths already matched
   this phase's requirements)
-- Changed in Phase 3A: **documentation only** — `docs/DATABASE.md` and
-  `docs/SECURITY.md` rewritten, `docs/ARCHITECTURE.md` rewritten,
-  `docs/BUSINESS_LOGIC.md` extended, this file updated. Zero source
-  files, zero dependencies
+- Changed in Phase 3A / 3A.1: **documentation only** — `docs/DATABASE.md`,
+  `docs/SECURITY.md`, `docs/ARCHITECTURE.md` rewritten,
+  `docs/BUSINESS_LOGIC.md` extended, this file updated. Zero source files,
+  zero dependencies, across both phases
 
 ## DECISIONS
 
@@ -776,20 +851,26 @@ no code, no schema, no Supabase**)
 
 ## OPEN QUESTIONS
 
-**Needing a user decision before Phase 3B freezes them into migrations:**
+**Locked in Phase 3A.1** (were the three blocking decisions):
 
-- `OQ-1` **Capacity units — farmers or quintals?** The implemented UI uses
-  both for the same concept. Phase 3A recommends modelling both
-  (`slot_capacity` + `quantity_capacity_quintal`) as genuinely separate
-  constraints, which implies a UI label correction in 3B
-  (`docs/DATABASE.md` §4.3, §19)
-- `OQ-6` **May a farmer hold multiple active bookings** (same day,
-  different centres)? Recommendation: no — one active booking per farmer
-  per service date, enforced by a partial unique index, otherwise one
-  account can hoard scarce slots (`docs/SECURITY.md` §11)
-- The `FULL`-is-derived recommendation (below) touches the approved
-  five-status vocabulary. The vocabulary is preserved for display, but the
-  *operator-settable* set shrinks to four — worth explicit confirmation
+- ~~`OQ-1` capacity units~~ → **two independent dimensions**, farmer
+  (farmers) and quantity (quintals), never conflated. Implies a UI label
+  correction in 3B — copy and prop names, not layout
+- ~~`OQ-6` multiple active bookings~~ → **at most one active booking per
+  farmer**, global rather than per-date, partial unique index
+- ~~`FULL` operator-settable vs derived~~ → **derived** from farmer
+  capacity; the five-value display vocabulary is preserved, the
+  operator-settable set is four
+
+**New questions opened by those decisions** (none blocking 3B):
+
+- `OQ-13` should quantity exhaustion also block new bookings, as farmer
+  exhaustion does? Currently warn-only, per the locked allocation priority
+- `OQ-14` grace period before a stale `CHECKED_IN`/`IN_PROGRESS` booking is
+  expired — too short destroys evidence of a centre-side problem, too long
+  blocks the farmer
+- `OQ-15` should check-in be allowed while a centre is `PAUSED`?
+  Recommended yes (the farmer has already travelled), with calling blocked
 
 **Resolved in Phase 3A** (reasoning in `docs/DATABASE.md` §20):
 
@@ -902,13 +983,19 @@ aggregate → processing/payment → audit → views → RPCs → realtime → s
 RLS policies shipped with each table, and the attack-based verification
 plan in `docs/SECURITY.md` §12.
 
-**Recommended before migrations are written**, because both change the
-schema rather than the code built on it:
+All three previously-blocking decisions are now **locked** (Phase 3A.1), so
+3B has no design prerequisites left. Two implementation couplings that must
+not be split across migrations:
 
-1. Confirm `OQ-1` (capacity units) and `OQ-6` (multiple active bookings) —
-   both are frozen the moment the first migration runs.
-2. Confirm the `FULL`-is-derived recommendation, since it narrows a
-   previously-approved operator-settable status set.
+1. The one-active-booking index and the `EXPIRED` sweep ship **together** —
+   the invariant without the sweep is a permanent farmer lockout (C-9).
+2. `rpc_create_booking` ships with `request_id` idempotency from the start —
+   retrofitting it after clients exist means clients that cannot safely
+   retry (C-10).
+
+The UI label correction for the two capacity dimensions also belongs in 3B,
+alongside wiring the screens to real data — the same components are being
+touched either way.
 
 Also still outstanding from earlier phases, unaffected by 3A: a real
 browser/visual check of Phase 2B–2D's responsive claims (a 3-phase-deep
@@ -1055,6 +1142,11 @@ Not started — awaiting explicit approval.
 - Phase 3A: `tsc --noEmit`, `next lint` and `next build` run and passed
   clean, all 19 routes still statically prerendered — run to prove the
   application is untouched rather than to assert it.
+- Phase 3A.1: `git status` and `git diff --stat` again confirm only
+  `docs/*.md` files differ — no source, no `package.json`, no lockfile, no
+  `.env`, no `.sql`, no migration directory, no `@supabase/*` dependency.
+  `tsc --noEmit`, `next lint` and `next build` re-run clean with all 19
+  routes still prerendered.
 - Phase 3A: the design was grounded in the implemented UI, not only the
   earlier drafts — all three `lib/demo/*.ts` modules, the route list, the
   operator state-transition handlers, and the admin/farmer component props

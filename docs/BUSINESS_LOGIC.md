@@ -7,12 +7,25 @@ state machines to build against, not a description of existing code.
 
 ### Inputs
 
-- Farmer: `crop`, `quantity`
-- Per-centre: acceptance of `crop`, `centre_status`, `daily_capacity`,
-  `remaining capacity` (derived), `processing_rate`
-- Per-centre queue: current `queue_entries` count / active bookings
-- Per-slot: `available slots`, remaining capacity per slot
-- Derived: `estimated wait time` per candidate centre
+`DECISION` (Phase 3A.1): the MVP engine ranks on the **farmer-processing
+dimension**; the quantity dimension is modelled and available but is not yet
+a ranking input (`docs/DATABASE.md` §4.3).
+
+**Primary (MVP):**
+- Farmer: `crop`
+- Per-centre: acceptance of `crop`, `effective_status`,
+  `daily_farmer_capacity`, `farmers_remaining` (derived),
+  `processing_rate_per_hour`
+- Per-centre queue: `farmers_waiting` (active bookings)
+- Per-slot: `farmer_capacity` and remaining availability
+- Derived: `estimated_wait_minutes` per candidate centre
+
+**Modelled, not yet ranked on:**
+- Farmer: declared `quantity` (quintals) — recorded on the booking and
+  checked against `quantity_remaining_quintal` for reporting; a hard block
+  is `OQ-13`
+- Per-centre: `daily_quantity_capacity_quintal`,
+  `quantity_committed_quintal`, `quantity_remaining_quintal`
 
 ### Outputs
 
@@ -28,9 +41,15 @@ state machines to build against, not a description of existing code.
 - A `CLOSED` centre must never be recommended.
 - A `PAUSED` centre must not be recommended for a new booking unless a later
   phase explicitly redesigns this (not assumed here).
-- A centre with insufficient remaining capacity for the farmer's quantity
-  must not be recommended.
+- A centre with no remaining **farmer capacity** must not be recommended
+  (this is the same condition that derives `FULL`).
 - A slot with no remaining availability must not be recommended.
+- `AMENDED (3A.1)`: the original form of this rule was "insufficient
+  remaining capacity **for the farmer's quantity**". Under the locked
+  capacity decision the MVP blocks on the farmer dimension and treats
+  quantity as a warning (`OQ-13`), so the quantity form of the rule is
+  deferred rather than dropped — it returns unchanged if `OQ-13` is
+  resolved toward a hard block.
 - The explanation text is generated from the same inputs used in the
   decision — no separate/inconsistent copy.
 
@@ -57,9 +76,12 @@ copy.
 
 ### System-derived (computed from live data, never operator-typed)
 
-- Waiting count (`queue_entries` where status = waiting)
-- Remaining capacity (derived: `daily_capacity − booked_count`, not stored
-  redundantly unless a strong reason emerges — see `docs/DATABASE.md`)
+- Waiting count (`bookings` where status = `CHECKED_IN`)
+- `farmers_remaining` (derived: `daily_farmer_capacity − farmers_booked`)
+- `quantity_remaining_quintal` (derived:
+  `daily_quantity_capacity_quintal − quantity_committed_quintal`)
+- Neither is stored redundantly; both are cached for display only in
+  `centre_live_state` — see `docs/DATABASE.md` §12.1
 - Processing-rate-based ETA
 - Utilization percentage
 - **`FULL`** — resolved below
@@ -77,8 +99,12 @@ booking is cancelled, capacity frees up, and the centre stays wrongly
 
 - Operator-settable: `OPEN | DELAYED | PAUSED | CLOSED`.
 - Derived for display and for allocation
-  (`v_centre_availability.effective_status`): adds `FULL` when remaining
-  slots or remaining quantity reach zero.
+  (`v_centre_availability.effective_status`): adds `FULL` when **farmer
+  processing capacity** is exhausted. Quantity exhaustion is deliberately
+  *not* a `FULL` trigger — it is a warning, not a booking block (`OQ-13`).
+- Precedence, with the reasoning for each ordering and eight worked edge
+  cases: `docs/DATABASE.md` §6.1–6.2. In short:
+  `CLOSED > PAUSED > FULL > DELAYED > OPEN`.
 - **The approved five-value vocabulary is preserved** — every screen still
   shows all five; `FULL` now comes from the derived value. The requirement
   was that the system *support* those states, and it does.
@@ -102,11 +128,15 @@ system, and no copy anywhere should imply otherwise.
 entity:
 
 ```
-BOOKED → CHECKED_IN → CALLED → IN_PROGRESS → COMPLETED
-   │           │         │
-   ├───────────┴─────────┴──→ CANCELLED   (not permitted once IN_PROGRESS)
-   └────────────────────────→ NO_SHOW     (from BOOKED or CHECKED_IN)
+CONFIRMED → CHECKED_IN → CALLED → IN_PROGRESS → COMPLETED
+    │            │          │
+    ├────────────┴──────────┴──→ CANCELLED   (blocked once IN_PROGRESS)
+    ├────────────┴──────────────→ NO_SHOW    (operator asserts non-arrival)
+    └───────────────────────────→ EXPIRED    (system sweep; date passed)
 ```
+
+Active (blocks a second booking): `CONFIRMED`, `CHECKED_IN`, `CALLED`,
+`IN_PROGRESS`. Terminal: `COMPLETED`, `CANCELLED`, `NO_SHOW`, `EXPIRED`.
 
 **`CHECKED_IN` and `WAITING` are the same state** — the open question is
 resolved by collapsing it. A booking *is* waiting precisely when it is
@@ -132,6 +162,105 @@ at most one (`bookings.processing_operator_id`, enforced by a partial unique
 index). The Operator dashboard's single "Current Processing" card therefore
 means *the farmer this operator is serving*, which is the only coherent
 per-user reading and needs no UI change.
+
+## One active booking per farmer — `DECISION` (Phase 3A.1, locked)
+
+**A farmer may hold at most one active booking at a time.** Active means
+`CONFIRMED`, `CHECKED_IN`, `CALLED`, or `IN_PROGRESS`; the four terminal
+statuses do not count and never block a rebooking.
+
+The limit is **global, not per-date**: a farmer with a confirmed booking
+for Thursday cannot also hold one for Friday, or one at another centre.
+The purpose is to stop one account holding several scarce slots, and a
+per-date limit would not do that.
+
+Enforcement is a **partial unique index on `farmer_id` over the active
+status set** — not application logic, because a check-then-insert leaves a
+window in which two concurrent requests both pass the check. Full mechanics,
+including the Postgres immutability constraint that forces the invariant to
+be expressed in statuses rather than dates: `docs/DATABASE.md` §7.6.
+
+Two consequences worth stating as rules rather than leaving implicit:
+
+- **`EXPIRED` exists because of this invariant.** Without a path out of the
+  active set for a booking nobody ever acted on, a farmer who books and
+  never arrives is locked out of the system permanently. A scheduled sweep
+  expires stale bookings (`docs/DATABASE.md` §7.7).
+- **Reassignment is an update, never cancel-then-create.** Moving a farmer
+  to a different slot or centre must modify the existing booking, so that
+  exactly one row is in the active set at every instant. Cancel-then-create
+  opens a window where the farmer has none — and, if it races, could leave
+  them with two.
+
+## Status edge cases — `DECISION` (Phase 3A.1)
+
+What must happen when centre status and existing bookings disagree. None of
+this is implemented; it is the specification Phase 3B builds against.
+
+### Centre `CLOSED` while confirmed bookings exist
+
+- **Bookings**: *not* auto-cancelled. Destroying a farmer's booking because
+  someone toggled a status is worse than leaving a stale one — the farmer
+  may have already travelled, and the centre may reopen within the hour.
+- **Queue**: preserved as-is; no calling while closed.
+- **Farmer display**: `CLOSED` plus an explicit notice that their booking
+  may be affected, and a `CENTRE_CLOSED` notification.
+- **Operator/Admin display**: the count of affected bookings surfaces as an
+  attention item — closing a centre with live bookings is an event someone
+  should act on, not a silent state change.
+- **Allocation**: centre excluded (already the standing rule).
+- Rebooking is a farmer or operator action. **Never automatic** — the
+  system does not get to move someone's appointment for them.
+
+### Centre `PAUSED` while a queue exists
+
+- **Queue**: preserved, order frozen. `rpc_call_next_farmer` rejects while
+  paused — that is the meaning of the state.
+- **Check-in**: still permitted (`OQ-15`). A farmer who has already
+  travelled should have their arrival recorded; refusing it loses real
+  information and tells them nothing useful. The queue grows but does not
+  move, which is an honest representation of a paused centre.
+- **Farmer display**: `PAUSED` with "your place is held".
+- **Allocation**: excluded for new bookings (standing rule).
+
+### Centre `DELAYED` with capacity remaining
+
+- Fully bookable. `effective_status` = `DELAYED` (case 6, `docs/DATABASE.md`
+  §6.2).
+- **ETA**: inflated by the reported delay — this is the one place the delay
+  figure changes a number rather than just a label.
+- **Allocation**: may deprioritise, must not exclude.
+
+### Centre `FULL` while bookings already exist
+
+- **Existing bookings are unaffected.** `FULL` blocks *new* bookings only.
+  A derived state must never invalidate a commitment already made — that
+  would make the derivation actively harmful.
+- **Farmer display**: `FULL` when browsing; their own booking still shows
+  `CONFIRMED`.
+
+### Cancellation frees capacity
+
+- `farmers_remaining` recomputes; `effective_status` flips `FULL → OPEN`
+  with no operator action. This is precisely the failure mode a manually-set
+  `FULL` would have had, and the main practical argument for deriving it.
+- The aggregate's `version` bumps, so farmers browsing see it live.
+
+### Centre reopening
+
+- `CLOSED → OPEN` restores normal operation. If capacity is still
+  exhausted, the centre displays `FULL` — again with no second operator
+  action, because the derivation handles it.
+
+### Stale derived availability
+
+- `effective_status` and the capacity counts are **cached** in
+  `centre_live_state` for display and realtime, and recomputed by trigger
+  on every input change.
+- **The rule that makes this safe: cache for display, recompute for
+  decisions.** Booking admission recomputes capacity inside the transaction
+  while holding the slot lock; it never trusts the cached number. The worst
+  case for a stale cache is a UI briefly behind, never an overbooked slot.
 
 ## Procurement — stages
 

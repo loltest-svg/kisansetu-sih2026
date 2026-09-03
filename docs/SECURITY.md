@@ -79,7 +79,7 @@ Notation: `R` read, `W` write, `—` no access. "Own centre" means
 | `centre_operating_days`, `slots` | R (active centres) | R own centre | R/W own centre | R/W all |
 | `centre_status` | R | R own centre, W via RPC | R/W own centre | R all |
 | `centre_status_events` | — | R own centre | R own centre | R all |
-| `centre_queue_state` | R (all — aggregate, no PII) | R own centre | R own centre | R all |
+| `centre_live_state` | R (all — aggregate, no PII) | R own centre | R own centre | R all |
 | `bookings` | R own; INSERT via RPC only | R/W own centre (via RPC) | R/W own centre | R all |
 | `procurement_records` | R own (via own booking) | R/W own centre | R/W own centre | R all |
 | `payment_records` | R own | R own centre | R/W own centre | R/W all |
@@ -185,14 +185,24 @@ backstop.
 
 - Realtime respects RLS, but only for tables that are *in the publication*.
   Publication membership is therefore an access-control decision, not a
-  performance one: `docs/DATABASE.md` §12 lists the four intended tables and
-  nothing else is added.
+  performance one. **Amended in 3A.1: two tables, not four** —
+  `centre_live_state` and `bookings`. `centre_status` and
+  `procurement_records` were dropped because their changes already reach
+  subscribers through the aggregate or through a refetch, and every
+  published table is another surface where a policy mistake becomes a live
+  leak (`docs/ARCHITECTURE.md` §Realtime publication).
 - `REPLICA IDENTITY` stays at the default (primary key). `FULL` would ship
   entire old rows to subscribers on every update — more data crossing the
   boundary, for no product benefit.
-- `centre_queue_state` is readable by all authenticated users **because it
-  contains no personal data** — counts and a currently-serving token. That
-  is what makes it safe to be the farmer's live-queue signal.
+- `centre_live_state` is readable by all authenticated users **because it
+  contains no personal data** — counts, capacity headroom, a derived status
+  and the currently-serving token. The token is the one quasi-identifier,
+  and it is exactly what a physical token display shows publicly. That is
+  what makes this row safe to use as the farmer's live-queue signal.
+- **What the aggregate must never gain**: a farmer name, a phone number, a
+  booking id, or a per-farmer position. Any of those would turn a safe
+  public projection into a directory. If a future feature seems to need one,
+  it belongs in `rpc_get_my_queue_position`, not here.
 
 ---
 
@@ -213,6 +223,8 @@ Rated by impact if it reaches production unmitigated.
 | S-9 | **Farmer enumeration through shared reference data.** Farmers legitimately read centres and slots; if slot rows ever carried booked-farmer references, that read becomes a directory of who is where | **Medium** | `slots` holds counts and capacity only; no farmer references on any farmer-readable table |
 | S-10 | **PII accumulation in audit metadata.** `before/after` JSON on a booking update would capture `farmer_phone_snapshot` into a long-retained, admin-readable table | **Medium** | Trigger explicitly allow-lists the columns copied into `metadata`; phone is excluded |
 | S-11 | **Anonymous audit under service role.** Privileged server actions write audit rows with `auth.uid() = NULL`, so the highest-privilege actions are the least attributable | **Medium** | `SET LOCAL app.actor_profile_id` in every privileged transaction; triggers prefer it over `auth.uid()` (`docs/DATABASE.md` §16) |
+| S-12 | **`SECURITY DEFINER` function used as an oracle.** `rpc_get_my_queue_position` reads rows the caller cannot. If it distinguishes "not your booking" from "no such booking" — by error text, error code, or response time — it becomes a probe for which booking IDs exist | **Medium** | Ownership validated before any read; **identical error for both cases**; only scalars in the response. The same rule binds every future `SECURITY DEFINER` RPC |
+| S-13 | **Aggregate scope creep.** `centre_live_state` is safe only while it stays non-personal. A later "show the next three tokens" or "name now serving" feature would quietly convert a public projection into a directory | **Medium** | Documented invariant (§7): no name, phone, booking id or per-farmer position may be added. Per-farmer data belongs in the RPC |
 
 ---
 
@@ -228,6 +240,9 @@ Rated by impact if it reaches production unmitigated.
 | C-6 | **Payment status regression.** `PAID → PENDING` from a stray update or double-click | Medium | Transition-guard trigger; `PAID` terminal except to `FAILED` by Master Admin |
 | C-7 | **Day-boundary errors.** "Today" computed in UTC on the server and IST in the user's head; bookings land on the wrong `service_date` around midnight | Medium | `service_date` stored explicitly, all boundary logic in `Asia/Kolkata`, never derived from a client clock (`OQ-10`) |
 | C-8 | **Orphaned processing on cancellation.** A booking cancelled while `IN_PROGRESS` leaves a half-written procurement record | Medium | State machine forbids cancellation after `IN_PROGRESS`; cancellation is a distinct terminal path |
+| C-9 | **Permanent farmer lockout.** With one-active-booking enforced but no expiry path, a farmer who books and never arrives can never book again — the invariant becomes a denial of service against the user it protects | **High** | `EXPIRED` status plus the scheduled sweep (`docs/DATABASE.md` §7.7). The two locked decisions are coupled and must ship together |
+| C-10 | **Retry mistaken for a duplicate.** A timed-out booking request, retried, hits the active-booking index and returns "you already have a booking" — technically true, practically wrong | Medium | `bookings.request_id` idempotency key; the RPC returns the existing booking for a repeated key (`docs/DATABASE.md` §7.5) |
+| C-11 | **Reassignment via cancel-then-create.** Moving a farmer to another slot by cancelling and recreating opens a window with zero active bookings, and can race into two | Medium | Reassignment is an `UPDATE` of the existing row; cancel-then-create is prohibited on this path |
 
 ---
 
@@ -251,11 +266,17 @@ bookings/day), with the point at which each stops being fine.
 These are catalogued in full in `docs/DATABASE.md` §19; the ones with a
 security or integrity edge:
 
-- `OQ-1` **capacity units** — a wrong unit lets a centre accept volume it
-  cannot handle, or reject farmers it could serve.
-- `OQ-6` **multiple active bookings per farmer** — without a limit, one
-  account can hold scarce slots across centres. Recommended: one active
-  booking per farmer per `service_date`, enforced by a partial unique index.
+- ~~`OQ-1`~~ **capacity units — LOCKED (3A.1)**: two independent
+  dimensions. The security-adjacent consequence is that admission control
+  now blocks on the farmer dimension only; quantity over-commitment is
+  visible but not prevented in the MVP (`OQ-13`).
+- ~~`OQ-6`~~ **multiple active bookings — LOCKED (3A.1)**: at most one
+  active booking per farmer, globally rather than per date, enforced by a
+  partial unique index over the active status set. This is a resource-abuse
+  control as much as a data rule: without it one account can hold scarce
+  slots across several centres. Note the coupling — the invariant is only
+  safe alongside the `EXPIRED` sweep, or an abandoned booking becomes a
+  permanent lockout for that farmer (`docs/DATABASE.md` §7.6–7.7).
 - `OQ-3` **who sets payment status** — an unowned write path is an
   unauditable one.
 - `OQ-9` **Centre Admin override of Operator status** — assumed yes;
@@ -279,8 +300,18 @@ role:
 4. Master Admin: confirm system-wide read works, and that day-to-day queue
    actions are still centre-scoped.
 5. Concurrency: two simultaneous `rpc_call_next_farmer`, two simultaneous
-   last-slot bookings — assert exactly one wins each.
-6. Build-time: assert the service-role key appears in no client chunk.
+   last-slot bookings, two simultaneous booking creations by the *same*
+   farmer — assert exactly one wins each, and that the loser gets a clean
+   domain error rather than a raw constraint violation.
+6. Invariant: create a booking, retry the same `request_id` — assert the
+   same booking is returned, not an error. Create a booking, cancel it,
+   create another — assert success. Leave a booking unattended past its
+   date, run the sweep, book again — assert success (the lockout case,
+   C-9).
+7. Oracle: call `rpc_get_my_queue_position` with another farmer's booking
+   id and with a random uuid — assert the two responses are
+   indistinguishable (S-12).
+8. Build-time: assert the service-role key appears in no client chunk.
 
 Each of these is a test that fails loudly, not a checklist item someone
 ticks.
