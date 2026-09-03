@@ -2,7 +2,7 @@
 
 ## CURRENT PHASE
 
-Phase 2C — Farmer Dashboard & Farmer Experience (UI only)
+Phase 2D — Master Admin Dashboard (UI only)
 
 ## COMPLETED
 
@@ -13,8 +13,126 @@ Phase 2C — Farmer Dashboard & Farmer Experience (UI only)
   initialized, checkpoint committed)
 - Phase 1 Next.js + UX4G + Tailwind(layout-only) + PWA foundation (see
   below for full detail; unchanged this phase, still verified working)
-- UX4G `SKILL.md` read completely (six times — Phase 0, 0.5, 1, 2A, 2B, 2C)
-- UX4G `Design.md` read completely (six times — Phase 0, 0.5, 1, 2A, 2B, 2C)
+- UX4G `SKILL.md` read completely (seven times — Phase 0, 0.5, 1, 2A, 2B,
+  2C, 2D)
+- UX4G `Design.md` read completely (seven times — Phase 0, 0.5, 1, 2A, 2B,
+  2C, 2D)
+- **Phase 2D — Master Admin Dashboard, UI only:**
+  - All 4 existing Admin routes now render real content, replacing every
+    Phase 2A `ComingSoon`: `/admin` (system overview), `/admin/centres`
+    (centre management), `/admin/capacity` (capacity & congestion),
+    `/admin/activity` (system activity). No route restructure needed —
+    the Phase 2A paths already matched this phase's instructions exactly.
+  - New components under `components/admin/`: `RoleSummary`,
+    `AttentionPanel`, `CentreOverviewCard`, `CentreCongestionCard`,
+    `CentreManagementCard`, `ActivityFeed`, `ActivityItem`. Reused
+    `components/shared/MetricCard` (Phase 2C) for every KPI card rather
+    than adding a redundant `SystemMetricCard` — the phase instructions'
+    suggested component list included one, but it would have duplicated
+    an existing generic component for no reason.
+  - **Deliberately not a re-skinned Operator dashboard**: no single-centre
+    queue, no per-farmer processing card, no operator-style status
+    controls. `/admin` shows cross-centre aggregates (`MetricCard` row),
+    a system-wide centre grid (`CentreOverviewCard`, all 6 demo centres),
+    a status-distribution breakdown, a system-wide capacity bar, the
+    exception list (`AttentionPanel`), a role-hierarchy acknowledgment
+    (`RoleSummary`), and a activity-feed preview — matching the instructed
+    "system-wide → monitoring-focused → exception-oriented" character
+    against Operator's "dense → operational → queue-focused" and Farmer's
+    "simple → personal → action-oriented".
+  - **Role hierarchy made explicit in the UI, not just in code comments**:
+    `RoleSummary` on `/admin` states plainly that the Master Admin
+    oversees every Centre Admin and Operator, with live counts (derived
+    from `demoCentres`, not separately hardcoded); every
+    `CentreManagementCard` on `/admin/centres` shows that centre's
+    assigned Centre Admin and operator count. No user-management routes
+    or CRUD were built — exactly as instructed, this is acknowledgment,
+    not administration.
+  - **Centre management actions are honestly non-functional**:
+    "Create centre" and every "Edit centre details" button use the native
+    `disabled` attribute with an explanatory `title` (not a fake enabled
+    control that silently does nothing, and not `aria-disabled` paired
+    with a no-op click handler, which was the first draft and is a worse
+    pattern — see UX4G findings below). "Deactivate"/"Activate centre"
+    toggles *local component state only* inside `CentreManagementCard`
+    (`useState`, resets on reload) with an explicit "(demo)" tag when
+    deactivated — no API call, no persistence claim, no fake "saved"
+    message anywhere on any of the 4 routes (checked directly, see
+    Validation below).
+  - **Demo-data strategy**: `lib/demo/adminDashboard.ts`, same pattern as
+    Phase 2B/2C's modules. Six demo centres spanning every
+    `CentreStatusValue` (2× OPEN, 1× DELAYED, 1× PAUSED, 1× FULL, 1×
+    CLOSED) so every UI state actually has an example to render. A small
+    pure `getAttentionState()` function classifies each centre into
+    `NORMAL | NEAR_CAPACITY | CONGESTED | DELAYED | PAUSED | FULL |
+    CLOSED` from its operator-reported `status` plus its capacity numbers
+    — explicitly documented as presentation-only UI classification, not
+    the Smart Allocation Engine and not a real congestion calculation
+    (docs/BUSINESS_LOGIC.md's "no automatic failure detection" rule
+    extended to this derived label too: status always wins over the
+    capacity heuristic, so an operator-reported DELAYED centre is never
+    re-labelled "Congested"). All system-wide aggregates
+    (`systemOverview`) are getters derived from `demoCentres`, never
+    separately hardcoded, so they can't silently drift out of sync with
+    the per-centre list — same rule already applied to
+    `demoCapacity` in Phase 2B.
+  - **Found and fixed a data-modeling issue before shipping**: the first
+    draft of `demoCentres` had every non-CLOSED centre reading as
+    "requiring attention" (one centre's booked quantity happened to sit
+    right at the 75% "Near Capacity" threshold), making `AttentionPanel`
+    show literally everything and stop being a useful filter. Lowered
+    that one centre's booked quantity so the panel now genuinely
+    demonstrates "quickly identify healthy vs. attention-needing centres"
+    — verified by re-rendering and re-inspecting the HTML, not just
+    re-reading the code.
+  - `/admin/capacity` sorts centres by utilisation (most congested first)
+    so the "where is capacity becoming a bottleneck" question the phase
+    poses is answered by the page's own ordering, not left to the reader
+    to scan for.
+  - **UX4G findings**: reused the Phase 2B-verified linear Progress
+    Indicator pattern (`ux4g-progress-bar`/`-fill` driven by
+    `--ux4g-progress-value`, not the README's plain `width` style) for
+    both the system-wide capacity bar on `/admin` and each centre's bar
+    on `/admin/capacity` — not factored into a shared component this
+    phase, to avoid touching the Phase 2B file that already has its own
+    copy. No new UX4G component gaps discovered this phase beyond what
+    Phase 2B/2C already found and documented (progress-circle, Input
+    wrapper, `ux4g-select`/Date Picker).
+  - **Accessibility fix applied before commit**: `CentreManagementCard`'s
+    "Edit centre details" button initially used `aria-disabled="true"`
+    with an `onClick` that called `preventDefault()` — a half-implemented
+    pattern (still focusable/clickable, screen readers announce
+    "disabled" but the click handler does nothing meaningful). Replaced
+    with the native `disabled` attribute, which is the simpler, more
+    standard, more correctly-accessible choice for a control that
+    genuinely has nothing to do yet.
+  - Validated: `tsc --noEmit`, `next lint`, `next build` all clean (twice
+    — once before, once after the attention-panel data fix); all 19
+    routes still statically prerender.
+  - Dev-server HTML inspection of all 4 Admin routes: exactly one `<h1>`
+    each; zero `<table>` elements; every `<button>` has an explicit
+    `type`; the Admin shell renders `<aside>` (persistent sidebar) and a
+    "Menu" drawer-trigger button, never `.bottom-nav` (grepped directly —
+    absent everywhere in the Admin tree, confirming Farmer's BottomNav
+    was not accidentally reused); active navigation correct on `/admin`
+    ("Overview") and `/admin/centres` ("Centres"); the "Create centre"
+    and all six "Edit centre details" buttons render with the native
+    `disabled` attribute and explanatory `title`; no "saved successfully"
+    or equivalent text anywhere across all 4 routes; `AttentionPanel`
+    correctly lists 5 of 6 centres after the data fix, excluding the one
+    healthy (NORMAL) centre.
+  - Confirmed the Phase 1 smoke test (`/`), the Operator dashboard
+    (`/operator`), and all 5 Farmer routes still return HTTP 200 and were
+    not modified by this phase.
+  - **Not literally screenshotted** at 1440/1280/1024/390/430px — same
+    tooling limitation as Phase 2B/2C (no browser/screenshot tool
+    available in this environment). Verified instead via rendered-HTML
+    inspection and reasoning from the actual CSS rules used (Card grids
+    via `grid-cols-*` only at the `lg:` breakpoint, flex-wrap throughout,
+    no fixed pixel widths introduced). Flagged here, not presented as
+    visually confirmed — this is now the third phase in a row with this
+    gap, and remains the single most valuable follow-up before any of
+    Phase 2B–2D is called demo-ready rather than build-clean.
 - **Phase 2C — Farmer Dashboard & Farmer Experience, UI only:**
   - **Route restructure** (per explicit Phase 2C instructions, not a
     silent change): `/farmer/new-booking` → `/farmer/bookings/new`
@@ -426,25 +544,24 @@ Phase 2C — Farmer Dashboard & Farmer Experience (UI only)
 
 ## CURRENT REPOSITORY STATE
 
-- Application: **scaffolded**, reusable UI shell **plus two real screen
-  groups** (`/operator`, all of `/farmer/*`) — Next.js App Router,
-  TypeScript, same 19 routes (2 farmer route paths renamed this phase),
-  builds and lints clean
+- Application: **scaffolded**, reusable UI shell **plus three real screen
+  groups** (`/operator`, all of `/farmer/*`, all of `/admin/*`) — Next.js
+  App Router, TypeScript, same 19 routes, builds and lints clean
 - Backend: **not configured** (no Supabase project connected — correctly
-  out of scope through Phase 2C)
+  out of scope through Phase 2D)
 - Database: **not created** (no tables, no migrations)
-- UI: `/operator` (Phase 2B) and all 5 `/farmer/*` routes (Phase 2C) are
-  real, UI-only screens backed by local demo state
-  (`lib/demo/operatorDashboard.ts`, `lib/demo/farmerDashboard.ts`). Every
-  Admin screen and every `/operator` sub-route (e.g. `/operator/queue`,
-  distinct from the `/operator` dashboard itself) is still `ComingSoon`
+- UI: `/operator` (Phase 2B), all 5 `/farmer/*` routes (Phase 2C), and all
+  4 `/admin/*` routes (Phase 2D) are real, UI-only screens backed by local
+  demo state (`lib/demo/operatorDashboard.ts`, `lib/demo/farmerDashboard.ts`,
+  `lib/demo/adminDashboard.ts`). Only `/operator`'s own sub-routes remain
+  `ComingSoon` (e.g. `/operator/queue`, `/operator/bookings` — distinct
+  from the `/operator` dashboard itself, which is real)
 - Auth: **not implemented** — role trees are separate route namespaces
   reached by URL, not gated by any login
-- New repository content since Phase 2B: `components/farmer/*` (10
-  files), `components/shared/*` (`WorkflowStepper`, `MetricCard` — both
-  moved out of `components/operator/`), `lib/demo/farmerDashboard.ts`,
-  rewritten `app/farmer/*` (route paths changed, see Phase 2C completed
-  work above), one import-path edit in `app/operator/page.tsx`
+- New repository content since Phase 2C: `components/admin/*` (7 files),
+  `lib/demo/adminDashboard.ts`, rewritten `app/admin/*` (all 4 route
+  files; no layout/nav changes — the Phase 2A route paths already matched
+  this phase's requirements)
 
 ## DECISIONS
 
@@ -557,6 +674,26 @@ Phase 2C — Farmer Dashboard & Farmer Experience (UI only)
   not (not retroactively touched this phase, since Phase 2C's scope was
   Farmer-only) — flagged as a known limitation, recommended for a later
   cleanup pass
+- Master Admin dashboard is deliberately not a re-skinned Operator
+  dashboard — system-wide aggregates + exception list + role acknowledgment
+  + audit-feed preview, no single-centre queue or per-farmer processing —
+  Phase 2D, per explicit instruction
+- Centre "attention state" (`NORMAL`/`NEAR_CAPACITY`/`CONGESTED`/etc.) is
+  a small pure presentation function over demo data, explicitly documented
+  as UI classification, not the allocation engine and not a real
+  congestion calculation; operator-reported `status` always overrides the
+  capacity-derived heuristic — Phase 2D
+- Centre management actions (`Create centre`, `Edit centre details`) use
+  the native `disabled` attribute with an explanatory `title`, not
+  `aria-disabled` + a no-op click handler (the first draft, replaced
+  before commit) — Phase 2D, simpler and more correctly accessible for a
+  control with nothing to do yet
+- `Deactivate`/`Activate centre` uses local component state only
+  (`useState` inside `CentreManagementCard`), explicitly tagged "(demo)"
+  when deactivated — Phase 2D, Data Honesty
+- Reused `components/shared/MetricCard` for every Admin KPI card rather
+  than adding a `SystemMetricCard` the phase instructions suggested —
+  avoided duplicating an existing generic component — Phase 2D
 
 ## OPEN QUESTIONS
 
@@ -645,22 +782,31 @@ Phase 2C — Farmer Dashboard & Farmer Experience (UI only)
   above) — if a future phase wants the UX4G-branded versions specifically,
   their actual DOM/JS contract still needs to be reverse-engineered from
   the compiled CSS and runtime source, the README does not cover it.
+- **Phase 2D**: same no-screenshot-tool limitation, now a third
+  consecutive phase (2B, 2C, 2D) — see Phase 2D completed work above. A
+  real browser/visual pass is the single highest-value follow-up before
+  any UI phase is called demo-ready rather than build-clean.
+- **Phase 2D**: `demoCentres`' first draft had 6 of 6 centres reading as
+  "requiring attention" — fixed before commit (see Phase 2D completed
+  work above), but a reminder that hand-written demo data needs the same
+  "does this actually demonstrate the feature" scrutiny as real data
+  would, not just type-correctness.
 
 ## NEXT PHASE
 
-Phase 2D — remaining scope, in whatever order is approved next: Master
-Admin dashboard real content, and/or Supabase backend setup (auth, RLS,
-schema) per the Recommended Build Order (Phase 0 report). Also worth
-considering before further UI phases: a real browser/visual check of
-Phase 2B and 2C's responsive claims (see Known Issues), and the small
-Input-wrapper fix for the Phase 1 smoke test. Phase 2C's instructions were
-explicit that Master Admin/Supabase/auth/RLS/allocation/Realtime/SMS/
-payment don't start without separate approval — none started.
+Backend/database phase (explicitly what Phase 2D's instructions named as
+next) — Supabase project setup, schema per `docs/DATABASE.md`, RLS
+policies per `docs/SECURITY.md`, and real authentication. Also still worth
+doing before or alongside that: a real browser/visual check of Phase
+2B–2D's responsive claims (see Known Issues, now a 3-phase-deep gap), and
+the small Input-wrapper fix for the Phase 1 smoke test. Not started —
+awaiting explicit approval.
 
 ## LAST VERIFIED
 
-- `.claude/skills/ux4g-design/SKILL.md` and `Design.md`: read in full six
-  times (Phase 0, 0.5, 1, 2A, 2B, 2C); content unchanged between reads.
+- `.claude/skills/ux4g-design/SKILL.md` and `Design.md`: read in full seven
+  times (Phase 0, 0.5, 1, 2A, 2B, 2C, 2D); content unchanged between
+  reads.
 - Phase 1: `npm view ux4g-web-components version` → `2.0.1`, matching
   Design.md §0's recorded npm version at time of writing.
 - Phase 1: `tsc --noEmit`, `next lint`, `next build` all run and passed
@@ -766,3 +912,24 @@ payment don't start without separate approval — none started.
   Phase 2B file (`app/operator/page.tsx`'s `MetricCard`/`WorkflowStepper`
   import paths) did not change its rendered output, confirmed by grepping
   for `"Centre Operations Dashboard"` in the response.
+- Phase 2D: `tsc --noEmit`, `next lint`, `next build` all run and passed
+  clean, twice (once before, once after the attention-panel data fix) —
+  same 19 routes, all statically prerendered.
+- Phase 2D: all 4 Admin routes checked directly via `curl` — all return
+  HTTP 200. Rendered HTML for every one inspected directly: exactly one
+  `<h1>` each; zero `<table>` elements across all 4; every `<button>`
+  carries an explicit `type`; the Admin shell renders `<aside>` +
+  a "Menu" button and never `.bottom-nav` (grepped directly, confirmed
+  absent — Farmer's BottomNav was not accidentally reused); active
+  navigation correct on `/admin` ("Overview") and `/admin/centres`
+  ("Centres"); `Create centre` and all six `Edit centre details` buttons
+  render with the native `disabled` attribute and an explanatory `title`;
+  `grep -i` for "saved successfully"/"successfully saved"/"changes saved"
+  across all 4 routes returned nothing; `AttentionPanel` lists exactly 5
+  of 6 centres after the data fix (re-verified by re-fetching and
+  re-parsing the rendered HTML, not by re-reading the source).
+- Phase 2D: confirmed the Phase 1 smoke test (`/`), the Operator dashboard
+  (`/operator`), and all 5 Farmer routes still return HTTP 200 and were
+  not modified by this phase — no Phase 2B or 2C file was touched at all
+  this phase (unlike Phase 2C, which touched two Phase 2B files for the
+  shared-component moves).
