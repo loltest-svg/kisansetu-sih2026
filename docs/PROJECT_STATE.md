@@ -2,8 +2,7 @@
 
 ## CURRENT PHASE
 
-Phase 2A — Application UI Shell (extended: genuine mobile/desktop
-adaptation, per-breakpoint, not a scaled-down desktop layout)
+Phase 2B — Operator / Centre Operations Dashboard (UI only)
 
 ## COMPLETED
 
@@ -14,8 +13,108 @@ adaptation, per-breakpoint, not a scaled-down desktop layout)
   initialized, checkpoint committed)
 - Phase 1 Next.js + UX4G + Tailwind(layout-only) + PWA foundation (see
   below for full detail; unchanged this phase, still verified working)
-- UX4G `SKILL.md` read completely (four times — Phase 0, 0.5, 1, and 2A)
-- UX4G `Design.md` read completely (four times — Phase 0, 0.5, 1, and 2A)
+- UX4G `SKILL.md` read completely (five times — Phase 0, 0.5, 1, 2A, 2B)
+- UX4G `Design.md` read completely (five times — Phase 0, 0.5, 1, 2A, 2B)
+- **Phase 2B — Operator / Centre Operations Dashboard, UI only:**
+  - `/operator` now renders the real dashboard (`app/operator/page.tsx`),
+    replacing the Phase 2A `ComingSoon` placeholder. Everything else in
+    the shell (`AppShell`, `Header`, `Sidebar`, `NavDrawer`, `BottomNav`,
+    `PageContainer`, `PageHeader`) is untouched.
+  - New reusable dashboard components under `components/operator/`:
+    `CentreStatusCard`, `OperationalMetricCard`, `CurrentProcessingCard`,
+    `WorkflowStepper`, `LiveQueue`, `QueueItemRow`, `CapacityCard`,
+    `UpcomingBookings`, `AlertsPanel`, `DailySummary` — each renders
+    props/data only, no business logic and no data fetching inside them
+  - **Demo-data strategy**: all presentation data centralized in one
+    clearly named, clearly documented module, `lib/demo/operatorDashboard.ts`
+    (file-level comment block: "PRESENTATION-ONLY DEMO DATA — NOT BACKEND
+    DATA"). Typed to match `docs/DATABASE.md`'s proposed entity shapes
+    (`queue_entries`, `bookings`, `centre_status`) so a real Supabase query
+    result of the same shape can replace it later without a component
+    redesign. The page itself also carries a persistent, visible
+    `"Demo data — not connected to a backend"` tag next to the title — not
+    just a code comment
+  - **Interactivity is real but local-only**: the page (`app/operator/page.tsx`)
+    is a Client Component holding `useState` for centre status, delay
+    reason, queue, current processing stage, and upcoming bookings.
+    "Pause/Resume Centre", "Report Delay" (via a Modal + Textarea, reusing
+    the Phase 1-verified Modal runtime pattern), "Call Next Farmer",
+    "Complete Processing", and "Check In" all mutate this local state —
+    nothing calls an API, nothing claims Supabase/Realtime/persistence.
+    State resets on reload. No fake API calls, no fake auth, no fake
+    realtime subscription anywhere in this phase's code
+  - Centre status control models the full `OPEN | DELAYED | PAUSED | FULL
+    | CLOSED` enum from `docs/BUSINESS_LOGIC.md`; "Report Delay" is the
+    only path to `DELAYED` (with a reason), matching the doc's
+    operator-provided/system-derived split — no automatic status changes
+  - Workflow display uses the fuller 7-stage journey the phase instructions
+    specified (Registration → Slot Booking → Check-in → Quality Check →
+    Weighment → Procurement → Payment) via UX4G's Stepper component,
+    reconciled with `docs/BUSINESS_LOGIC.md`'s narrower 5-stage
+    operator-actionable subset — see the note added to that doc
+  - **UX4G components used, each verified before use** (README text and/or
+    grepped compiled CSS, not assumed): Card, Tag, List (queue and
+    bookings — chosen over Table specifically to avoid the
+    horizontal-overflow risk a wide table carries on a phone), Alert,
+    Stepper, Progress Indicator (linear `ux4g-progress-bar`, not the
+    circular variant — see below), Button, Modal, Textarea, plus the full
+    typography scale and layout/flex/gap utilities already established in
+    Phase 2A
+  - **Identified UX4G gap/limitation**: `ux4g-progress-circle` (a
+    candidate for the capacity utilisation indicator, and something
+    `docs/UI_SPEC.md` had flagged `TODO — VERIFY`) exists, but its real
+    DOM contract in the compiled CSS
+    (`[data-ux-progress-circle]`/`-indicator`/`-ring`/`-value-wrap`, a
+    conic-gradient mask driven by several CSS custom properties) is
+    materially more complex than the two-line example the README shows.
+    Rather than guess at an undocumented structure, `CapacityCard` uses
+    the fully-documented linear `ux4g-progress-bar` instead — also a
+    legitimate "Progress Indicator" per Design.md §12, just the safer of
+    the two verified options
+  - **Second finding**: the linear progress bar's fill width is actually
+    driven by a `--ux4g-progress-value` CSS custom property in the
+    compiled CSS (`inline-size: max(calc(var(--ux4g-progress-value)*1%),1px)`),
+    not the plain `style="width:60%"` the README's simplified example
+    shows. Confirmed by reading the compiled rule directly and used the
+    custom-property form, not the README's literal sample
+  - **Touch-target fix applied before commit**: initial action buttons used
+    `ux4g-btn-sm`/`-xs` (32px/24px min-height, both under the 44px minimum
+    — confirmed by reading the compiled CSS). All nine operator action/
+    link buttons were upgraded to `ux4g-btn-md` (48px, confirmed via the
+    `:where()`-wrapped base rule vs. `.ux4g-btn-md`'s own more specific
+    `min-height:var(--ux4g-size-48)` rule) before validation passed
+  - Non-colour-only status signalling carried through consistently: Tag
+    text itself always spells out the state (OPEN/DELAYED/PROCESSING/etc,
+    never colour alone); the active queue row also gets a font-weight
+    change, matching the same pattern established for nav active-state in
+    Phase 2A
+  - Personal information: farmer phone numbers stay masked
+    (`98XXXXXX21`-style) everywhere, including in the one locally-synthesized
+    "checked in" queue entry the demo interaction creates
+  - Validated: `tsc --noEmit` clean, `next lint` clean, `next build`
+    succeeds — same 19 routes, all statically prerendered (this page is a
+    Client Component but still prerenders; interactivity hydrates
+    client-side)
+  - Dev-server HTML inspection of `/operator`: exactly one `<h1>`;
+    landmarks intact and unchanged from Phase 2A; the "Demo data" tag is
+    present in the rendered HTML (not just in code); all card sections
+    present; zero `<table>` elements; every `<button>` has an explicit
+    `type`; the initial `Call Next Farmer` button renders `disabled`
+    (correct — a farmer is already PROCESSING in the seed data); the
+    linear progress bar's `--ux4g-progress-value:76` custom property is
+    present and matches the seed data's 76% utilisation; all 7 workflow
+    stage labels render twice each (the verified desktop-horizontal +
+    mobile-vertical dual-render pattern)
+  - Confirmed the Phase 1 UX4G smoke test at `/` and the Farmer/Admin
+    shells still return HTTP 200 and were not modified
+  - **Not literally screenshotted** at the requested 1440/1280/1024/390/430
+    widths — no browser/screenshot tool is available in this environment.
+    Verified instead via rendered-HTML inspection plus reasoning from the
+    actual CSS rules used (flex-wrap everywhere, `grid-cols-*` only via
+    the `lg:` breakpoint, no fixed pixel widths introduced anywhere in the
+    new code) — the same substitute verification approach already used
+    for responsive claims in Phase 2A. Flagged here rather than silently
+    presented as visually confirmed.
 - **Phase 2A — reusable application UI shell:**
   - Shell components (`components/shell/`): `AppShell`, `Header`, `Sidebar`
     (persistent desktop nav, Operator/Admin), `NavDrawer` (mobile nav, all
@@ -200,20 +299,21 @@ adaptation, per-breakpoint, not a scaled-down desktop layout)
 
 ## CURRENT REPOSITORY STATE
 
-- Application: **scaffolded**, now with a **reusable UI shell** — Next.js App
-  Router, TypeScript, 19 routes total (1 smoke test + 15 role screens +
-  `/_not-found` + implicit), builds and lints clean
-- Backend: **not configured** (no Supabase project connected — correctly out
-  of scope through Phase 2A)
+- Application: **scaffolded**, reusable UI shell **plus one real screen**
+  (`/operator`) — Next.js App Router, TypeScript, same 19 routes, builds
+  and lints clean
+- Backend: **not configured** (no Supabase project connected — correctly
+  out of scope through Phase 2B)
 - Database: **not created** (no tables, no migrations)
-- UI: **shell only** — Header/Sidebar/NavDrawer/PageContainer/PageHeader
-  built and reused across all three role trees; every individual screen's
-  real content is still `ComingSoon` (Phase 2B)
+- UI: `/operator` is a real, UI-only dashboard backed by local demo state
+  (`lib/demo/operatorDashboard.ts`). Every other role screen
+  (`/farmer/*`, `/admin/*`, and `/operator`'s own sub-routes like
+  `/operator/queue`) is still `ComingSoon` — Phase 2B touched only
+  `/operator` itself, per its stated scope
 - Auth: **not implemented** — role trees are separate route namespaces
   reached by URL, not gated by any login
-- New repository content since Phase 1: `components/shell/*` (7 files),
-  `lib/navigation.ts`, `app/farmer/*`, `app/operator/*`, `app/admin/*` (15
-  route files + 3 layouts)
+- New repository content since Phase 2A: `components/operator/*` (10
+  files), `lib/demo/operatorDashboard.ts`, rewritten `app/operator/page.tsx`
 
 ## DECISIONS
 
@@ -275,6 +375,32 @@ adaptation, per-breakpoint, not a scaled-down desktop layout)
 - Device safe-area inset (notch/gesture bar) for BottomNav needed one
   narrowly-scoped custom CSS rule and `viewportFit: "cover"` — UX4G has no
   utility for this platform concern — Phase 2A
+- `/operator` dashboard demo data centralized in one file
+  (`lib/demo/operatorDashboard.ts`), typed to match `docs/DATABASE.md`'s
+  proposed schema shapes, with a persistent visible "Demo data" tag on the
+  page itself — not just a code comment — Phase 2B
+- Dashboard interactions (Call Next, Complete Processing, Check In, Pause/
+  Resume Centre, Report Delay) are real local React state changes, not
+  fake API calls — chosen over static/non-interactive mockup so the
+  intended UX is actually demonstrable, while staying honest that none of
+  it persists — Phase 2B
+- `CapacityCard` uses the linear Progress Indicator, not the circular one
+  — the circular variant's real compiled-CSS structure is materially more
+  complex than its README example, and guessing at it risked a broken
+  render — Phase 2B
+- All operator dashboard action/link buttons use `ux4g-btn-md` (48px),
+  not `-sm`/`-xs` (32px/24px, both under the 44px touch-target minimum) —
+  Phase 2B, applies to every future dashboard's tap targets too
+- Live Queue and Upcoming Bookings use List, not Table — avoids the
+  horizontal-overflow risk a wide table carries on a phone, same reasoning
+  already applied to nav in Phase 2A — Phase 2B
+- Current Processing's workflow display uses the fuller 7-stage journey
+  (Registration → Slot Booking → Check-in → Quality Check → Weighment →
+  Procurement → Payment) rather than `docs/BUSINESS_LOGIC.md`'s original
+  5-stage operator-actionable subset — the two are reconciled, not
+  contradictory: the 7-stage view is display/context, the 5-stage subset
+  remains what an operator can actually act on — Phase 2B, doc updated in
+  the same change
 
 ## OPEN QUESTIONS
 
@@ -338,18 +464,28 @@ adaptation, per-breakpoint, not a scaled-down desktop layout)
   sub-page) was caught by actually reading the rendered HTML, not assumed
   fixed — a reminder that shell code needs the same verification rigor as
   everything else, not just "the build succeeded."
+- **Phase 2B**: `ux4g-progress-circle`'s real DOM contract (compiled CSS)
+  is more complex than its README sample — not used, linear bar used
+  instead; see Phase 2B completed work above.
+- **Phase 2B**: no browser/screenshot tool is available in this
+  environment, so the requested 1440/1280/1024/390/430px checks were done
+  by rendered-HTML inspection and CSS-rule reasoning, not literal
+  screenshots. Worth a real visual pass (browser devtools or the `run`
+  skill, if it supports viewport resizing) before this is called
+  demo-ready, not just build-clean.
 
 ## NEXT PHASE
 
-Phase 2B — Real screen content (Farmer/Operator/Admin, per
-`docs/UI_SPEC.md`, replacing each `ComingSoon`) and/or Supabase backend
-setup, per the Recommended Build Order (Phase 0 report) — not started;
-awaiting explicit approval.
+Phase 2C — remaining scope, in whatever order is approved next: Farmer
+dashboard real content, Master Admin dashboard real content, and/or
+Supabase backend setup (auth, RLS, schema) per the Recommended Build Order
+(Phase 0 report). Phase 2B's instructions were explicit that none of these
+start without separate approval — not started.
 
 ## LAST VERIFIED
 
-- `.claude/skills/ux4g-design/SKILL.md` and `Design.md`: read in full four
-  times (Phase 0, 0.5, 1, 2A); content unchanged between reads.
+- `.claude/skills/ux4g-design/SKILL.md` and `Design.md`: read in full five
+  times (Phase 0, 0.5, 1, 2A, 2B); content unchanged between reads.
 - Phase 1: `npm view ux4g-web-components version` → `2.0.1`, matching
   Design.md §0's recorded npm version at time of writing.
 - Phase 1: `tsc --noEmit`, `next lint`, `next build` all run and passed
@@ -411,4 +547,24 @@ awaiting explicit approval.
   are different components with no obligation to share a cutoff).
 - No Supabase project, no auth, no database migration has been created —
   confirmed by absence of any Supabase-related file or dependency in
-  `package.json` at time of writing.
+  `package.json` at time of writing (still true after Phase 2B).
+- Phase 2B: `tsc --noEmit`, `next lint`, `next build` all run and passed
+  clean, twice (once before the touch-target fix, once after) — same 19
+  routes, all statically prerendered.
+- Phase 2B: rendered `/operator` HTML inspected directly — one `<h1>`;
+  unchanged Phase 2A landmarks; `"Demo data"` tag present; zero
+  `<table>` elements; every `<button>` carries an explicit `type`; the
+  seeded `Call Next Farmer` button renders `disabled` (correct, given a
+  farmer is already PROCESSING in the seed data); `--ux4g-progress-value:76`
+  present on the capacity bar (matches 76/100 booked in the seed data);
+  all 7 workflow stage labels appear exactly twice each (desktop +
+  mobile dual-render).
+- Phase 2B: button min-height claims verified by reading the compiled CSS
+  directly, not assumed — `.ux4g-btn-sm` 2rem (32px), `.ux4g-btn-xs`
+  1.5rem (24px), `.ux4g-btn-md` `var(--ux4g-size-48)` (48px, more specific
+  than the zero-specificity `:where()` base rule's 2.5rem). All nine
+  operator buttons confirmed as `ux4g-btn-md` in rendered HTML after the
+  fix (`grep -o ux4g-btn-md | wc -l` → 9).
+- Phase 2B: confirmed the Phase 1 smoke test (`/`) and the Farmer
+  (`/farmer`) and Admin (`/admin`) shells still return HTTP 200 and were
+  not modified by this phase's changes.

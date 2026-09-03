@@ -106,3 +106,18 @@ and component choice for the two must be visibly distinct (see
 reflecting whatever payment state exists elsewhere. It is not payment
 processing, and no part of this stage initiates or handles a real
 transaction.
+
+### Display stages vs. operator-actionable stages (Phase 2B)
+
+The Operator Dashboard's Current Processing widget
+(`components/operator/WorkflowStepper.tsx`) displays a fuller 7-step
+journey — `Registration → Slot Booking → Check-in → Quality Check →
+Weighment → Procurement → Payment` — rather than the 5-stage list above.
+These are not in conflict: `Registration` and `Slot Booking` happen
+earlier, online, before the farmer physically arrives (they are Farmer-app
+flow, `docs/UI_SPEC.md` §B), and are shown on the operator's stepper only
+as journey context, not as anything the operator does or completes. The
+5-stage list above remains the accurate scope of what happens *at the
+centre* and what an operator can actually act on — `handleCallNext` in
+`app/operator/page.tsx` starts a newly-called farmer's stage index at
+`CHECK_IN` for exactly this reason, never at `REGISTRATION`.
