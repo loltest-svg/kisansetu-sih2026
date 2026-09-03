@@ -1,0 +1,13 @@
+/*
+ * Tailwind is imported for layout glue only (grid/flex composition,
+ * responsive containers, positioning) — see docs/UX4G.md "Tailwind
+ * boundary". Colour, spacing, radius, typography, borders, shadows and
+ * focus treatment are never set here: ux4g-web-components/styles.css
+ * (imported in app/layout.tsx) already supplies body background, text
+ * colour and base font via its own reset layer
+ * (`:where(body){background-color:var(--ux4g-bg-neutral-elevated);
+ * color:var(--ux4g-text-neutral-primary);font-family:var(--ux4g-font-family-base,...)}`),
+ * so no custom body rule is added here — doing so would duplicate a
+ * token the design system already owns.
+ */
+@import "tailwindcss";
