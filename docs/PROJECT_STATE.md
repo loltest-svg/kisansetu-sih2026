@@ -2,7 +2,8 @@
 
 ## CURRENT PHASE
 
-Phase 2D — Master Admin Dashboard (UI only)
+Phase 3A — Backend Architecture & Supabase Data Design (**design only —
+no code, no schema, no Supabase**)
 
 ## COMPLETED
 
@@ -17,6 +18,78 @@ Phase 2D — Master Admin Dashboard (UI only)
   2C, 2D)
 - UX4G `Design.md` read completely (seven times — Phase 0, 0.5, 1, 2A, 2B,
   2C, 2D)
+- **Phase 3A — Backend architecture & data design (DESIGN ONLY):**
+  - **Nothing was built.** No Supabase project, no dependency, no SQL, no
+    migration, no policy, no connection, no credential. The only changes
+    are to five documents; the application is byte-identical.
+  - Grounded in the *implemented* UI, not just the earlier drafts — all
+    three `lib/demo/*.ts` modules, all 15 route files and every
+    role component tree were re-read, because three phases of screens are
+    now the concrete statement of what the backend must produce.
+  - `docs/DATABASE.md` **rewritten** as the full logical design: 16
+    tables/entities, enum-vs-table-vs-derived reasoning, constraints,
+    indexes, two views, ten RPC functions, race-condition analysis, a
+    complete UI→data mapping for all 15 routes, a 14-step migration order,
+    and 12 numbered open questions.
+  - `docs/SECURITY.md` **rewritten** with the RLS design: per-table
+    role/scope matrix, the `SECURITY DEFINER` scope-helper pattern, the
+    RPC-only write surface, and an adversarial review (11 security, 8
+    consistency, 5 scalability findings, each rated with a mitigation).
+  - `docs/ARCHITECTURE.md` rewritten: client/server/database responsibility
+    split, realtime strategy, notification outbox, and an explicit
+    statement that everything below the UI is design.
+  - `docs/BUSINESS_LOGIC.md` extended: three resolved decisions (below)
+    plus the three-state-machine model and minimal quality/payment records.
+  - **Five previously-open questions resolved with reasoning**:
+    1. `FULL` is **derived, not operator-set** — it is a capacity
+       consequence, not an operator intent, and allowing both creates two
+       contradicting sources of truth for one fact. The approved
+       five-value vocabulary is preserved via a derived
+       `effective_status`; no UI change needed.
+    2. `CHECKED_IN` vs `WAITING` are **the same state** — resolved by
+       collapsing `queue_entries` into `bookings`.
+    3. `queue_entries` is **removed** — it would have been 1:1 with
+       `bookings`, carried a duplicate status enum for the same fact, and
+       been mutated by the same actions. Recorded the two conditions
+       (re-queue after no-show, walk-ins) that would justify reinstating it.
+    4. Operator↔centre assignment uses a **`centre_assignments` join
+       table**, not `profiles.centre_id` — a nullable FK cannot answer
+       "who had access to this centre, and when", which is exactly what
+       the approved audit requirement asks.
+    5. Processing **stage is derived from timestamps**, not stored — a
+       stage column can contradict its own evidence.
+  - **Contradiction found in the implemented UI and escalated, not
+    patched over** (`OQ-1`): capacity is rendered in *quintals*
+    (`todaysCapacityQuintal`, `bookedQuintal`) while processing rate,
+    waiting counts and "24 slots available today" are in *farmers*. The
+    numbers only agree because demo fixtures were carried from a
+    farmer-count model into quintal-labelled fields. These are two real
+    and independent constraints (throughput vs volume), so the design
+    models both (`slot_capacity` + `quantity_capacity_quintal`) — but the
+    UI labels need a corresponding correction in 3B, and the underlying
+    product question needs user confirmation.
+  - **Concurrency requirement reconciled with the UI**: "multiple
+    operators at one centre simultaneously" conflicts with a naive
+    one-in-progress-per-centre constraint. Resolved per-operator (a centre
+    may have several farmers in progress; each operator at most one), which
+    also makes the existing single "Current Processing" card correct as
+    *this operator's* farmer, with no UI change.
+  - **Two silent-wrong-answer traps identified** that would not surface as
+    errors: (a) queue position computed by a window function inside an
+    RLS-protected view returns 1 for every farmer, because RLS filters
+    rows before the window sees them — position must be a `SECURITY
+    DEFINER` function; (b) a farmer subscribed only to their own booking
+    receives no realtime event when the farmer *ahead* of them is called,
+    because that row is correctly invisible — hence the one deliberate
+    denormalisation, a non-personal `centre_queue_state` aggregate.
+  - **Deviated from the brief's suggested migration order, with reason**:
+    RLS is not a late step. Policies ship in the same migration as their
+    table, because a table that exists unprotected for one commit is a
+    table that can leak in that commit. Realtime genuinely does go last.
+  - Validation: `tsc --noEmit`, `next lint`, `next build` all clean and all
+    19 routes still prerender — expected, since no source file changed;
+    run to prove it rather than assert it. `git diff --stat` confirms
+    documentation-only changes.
 - **Phase 2D — Master Admin Dashboard, UI only:**
   - All 4 existing Admin routes now render real content, replacing every
     Phase 2A `ComingSoon`: `/admin` (system overview), `/admin/centres`
@@ -547,9 +620,11 @@ Phase 2D — Master Admin Dashboard (UI only)
 - Application: **scaffolded**, reusable UI shell **plus three real screen
   groups** (`/operator`, all of `/farmer/*`, all of `/admin/*`) — Next.js
   App Router, TypeScript, same 19 routes, builds and lints clean
-- Backend: **not configured** (no Supabase project connected — correctly
-  out of scope through Phase 2D)
-- Database: **not created** (no tables, no migrations)
+- Backend: **not configured** — no Supabase project, no `@supabase/*`
+  dependency, no connection, no credential. **Designed** in Phase 3A
+  (`docs/DATABASE.md`, `docs/SECURITY.md`), implemented nowhere
+- Database: **not created** — no tables, no migrations, no SQL files. The
+  logical schema exists only as design documentation
 - UI: `/operator` (Phase 2B), all 5 `/farmer/*` routes (Phase 2C), and all
   4 `/admin/*` routes (Phase 2D) are real, UI-only screens backed by local
   demo state (`lib/demo/operatorDashboard.ts`, `lib/demo/farmerDashboard.ts`,
@@ -562,6 +637,10 @@ Phase 2D — Master Admin Dashboard (UI only)
   `lib/demo/adminDashboard.ts`, rewritten `app/admin/*` (all 4 route
   files; no layout/nav changes — the Phase 2A route paths already matched
   this phase's requirements)
+- Changed in Phase 3A: **documentation only** — `docs/DATABASE.md` and
+  `docs/SECURITY.md` rewritten, `docs/ARCHITECTURE.md` rewritten,
+  `docs/BUSINESS_LOGIC.md` extended, this file updated. Zero source
+  files, zero dependencies
 
 ## DECISIONS
 
@@ -697,15 +776,37 @@ Phase 2D — Master Admin Dashboard (UI only)
 
 ## OPEN QUESTIONS
 
+**Needing a user decision before Phase 3B freezes them into migrations:**
+
+- `OQ-1` **Capacity units — farmers or quintals?** The implemented UI uses
+  both for the same concept. Phase 3A recommends modelling both
+  (`slot_capacity` + `quantity_capacity_quintal`) as genuinely separate
+  constraints, which implies a UI label correction in 3B
+  (`docs/DATABASE.md` §4.3, §19)
+- `OQ-6` **May a farmer hold multiple active bookings** (same day,
+  different centres)? Recommendation: no — one active booking per farmer
+  per service date, enforced by a partial unique index, otherwise one
+  account can hoard scarce slots (`docs/SECURITY.md` §11)
+- The `FULL`-is-derived recommendation (below) touches the approved
+  five-status vocabulary. The vocabulary is preserved for display, but the
+  *operator-settable* set shrinks to four — worth explicit confirmation
+
+**Resolved in Phase 3A** (reasoning in `docs/DATABASE.md` §20):
+
+- ~~Whether `FULL` is operator-set, system-derived, or both~~ → **derived**
+- ~~Whether `CHECKED_IN` and `WAITING` are distinct~~ → **same state**
+- ~~Whether an operator can be assigned to more than one centre~~ →
+  schema supports many via `centre_assignments`; not enforced either way,
+  so a relief operator is a data change rather than a migration
+
+**Still deferred by design:**
+
 - Allocation-engine ranking/scoring formula when multiple centres are
-  eligible — not designed yet (`docs/BUSINESS_LOGIC.md`)
-- Whether `FULL` centre status is operator-set, system-suggested, or both —
-  not decided (`docs/BUSINESS_LOGIC.md`)
-- Whether `CHECKED_IN` and `WAITING` are distinct queue states or collapsed
-  into one (`docs/BUSINESS_LOGIC.md`)
-- Whether an operator can be assigned to more than one centre — currently
-  assumed one operator → one centre for MVP; unconfirmed
-  (`docs/SECURITY.md`)
+  eligible — deliberately not designed (`docs/BUSINESS_LOGIC.md`). The data
+  model provides its inputs; the formula is a later decision
+- `OQ-3` who sets payment status, `OQ-7` what happens on quality rejection,
+  `OQ-8` MSP amounts, `OQ-11` end-of-day carry-over, and five further
+  numbered ambiguities — full list in `docs/DATABASE.md` §19
 - The "v2.0.1 button theming note" in `SKILL.md`: the `:where()`-wrapper
   claim is now confirmed true for button sizing (see Phase 1 completed
   work above); the claim that colour theming needs no `!important` is
@@ -794,13 +895,26 @@ Phase 2D — Master Admin Dashboard (UI only)
 
 ## NEXT PHASE
 
-Backend/database phase (explicitly what Phase 2D's instructions named as
-next) — Supabase project setup, schema per `docs/DATABASE.md`, RLS
-policies per `docs/SECURITY.md`, and real authentication. Also still worth
-doing before or alongside that: a real browser/visual check of Phase
-2B–2D's responsive claims (see Known Issues, now a 3-phase-deep gap), and
-the small Input-wrapper fix for the Phase 1 smoke test. Not started —
-awaiting explicit approval.
+Phase 3B — backend implementation: Supabase project provisioning, the
+migration sequence in `docs/DATABASE.md` §18 (identity → helpers →
+reference data → assignments → status → capacity → bookings → queue
+aggregate → processing/payment → audit → views → RPCs → realtime → seed),
+RLS policies shipped with each table, and the attack-based verification
+plan in `docs/SECURITY.md` §12.
+
+**Recommended before migrations are written**, because both change the
+schema rather than the code built on it:
+
+1. Confirm `OQ-1` (capacity units) and `OQ-6` (multiple active bookings) —
+   both are frozen the moment the first migration runs.
+2. Confirm the `FULL`-is-derived recommendation, since it narrows a
+   previously-approved operator-settable status set.
+
+Also still outstanding from earlier phases, unaffected by 3A: a real
+browser/visual check of Phase 2B–2D's responsive claims (a 3-phase-deep
+gap), and the Input-wrapper fix for the Phase 1 smoke test.
+
+Not started — awaiting explicit approval.
 
 ## LAST VERIFIED
 
@@ -933,3 +1047,17 @@ awaiting explicit approval.
   not modified by this phase — no Phase 2B or 2C file was touched at all
   this phase (unlike Phase 2C, which touched two Phase 2B files for the
   shared-component moves).
+- Phase 3A: design phase, so the meaningful verification is that **nothing
+  changed**. `git status` and `git diff --stat` confirm only five `docs/*.md`
+  files differ — no file under `app/`, `components/`, `lib/`, `public/`, no
+  `package.json`, no lockfile, no `.env*`, no `.sql`, no migration
+  directory, no `@supabase/*` dependency.
+- Phase 3A: `tsc --noEmit`, `next lint` and `next build` run and passed
+  clean, all 19 routes still statically prerendered — run to prove the
+  application is untouched rather than to assert it.
+- Phase 3A: the design was grounded in the implemented UI, not only the
+  earlier drafts — all three `lib/demo/*.ts` modules, the route list, the
+  operator state-transition handlers, and the admin/farmer component props
+  were re-read. That is what surfaced the capacity-unit contradiction
+  (`OQ-1`) and the multi-operator/single-"Current Processing" tension,
+  neither of which is visible from the documentation alone.
