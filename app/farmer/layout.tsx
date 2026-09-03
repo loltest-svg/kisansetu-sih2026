@@ -11,7 +11,7 @@ export default function FarmerLayout({
       role="farmer"
       roleLabel="Farmer"
       navItems={farmerNav}
-      variant="simple"
+      mobileNav="bottom"
     >
       {children}
     </AppShell>

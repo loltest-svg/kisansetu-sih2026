@@ -17,9 +17,14 @@ import { DRAWER_ID } from "@/components/shell/NavDrawer";
 export default function Header({
   homeHref,
   roleLabel,
+  showMenuButton,
 }: {
   homeHref: string;
   roleLabel: string;
+  /** false for `mobileNav="bottom"` (Farmer) — BottomNav already covers
+   * every destination on mobile, so there's nothing for this button to
+   * open there. */
+  showMenuButton: boolean;
 }) {
   return (
     <header>
@@ -32,14 +37,16 @@ export default function Header({
           </Link>
 
           <div className="ux4g-navbar-right ux4g-d-flex ux4g-flex-row ux4g-gap-m">
-            <button
-              type="button"
-              data-drawer={DRAWER_ID}
-              className="ux4g-btn ux4g-btn-outline-primary ux4g-btn-sm lg:hidden"
-              aria-haspopup="dialog"
-            >
-              Menu
-            </button>
+            {showMenuButton ? (
+              <button
+                type="button"
+                data-drawer={DRAWER_ID}
+                className="ux4g-btn ux4g-btn-outline-primary ux4g-btn-sm lg:hidden"
+                aria-haspopup="dialog"
+              >
+                Menu
+              </button>
+            ) : null}
 
             <button
               type="button"

@@ -2,7 +2,8 @@
 
 ## CURRENT PHASE
 
-Phase 2A — Application UI Shell
+Phase 2A — Application UI Shell (extended: genuine mobile/desktop
+adaptation, per-breakpoint, not a scaled-down desktop layout)
 
 ## COMPLETED
 
@@ -83,6 +84,68 @@ Phase 2A — Application UI Shell
     explicit `type="button"`
   - Confirmed the Phase 1 UX4G smoke test at `/` still renders correctly
     and was not modified or removed
+- **Phase 2A extension — genuine mobile/desktop adaptation** (KisanSetu
+  farmer-dashboard reference image supplied; used for information
+  hierarchy and mobile nav pattern only, not copied pixel-for-pixel):
+  - Replaced the binary `variant` prop with `mobileNav: "bottom" |
+    "drawer"`. **Every** role now gets the same persistent Sidebar at
+    `lg` and up (desktop no longer differs from before); below `lg`,
+    Farmer gets a new fixed `BottomNav` (`components/shell/BottomNav.tsx`)
+    while Operator/Admin keep the Header-triggered NavDrawer already
+    verified in the base Phase 2A work — so the layout adapts by
+    breakpoint *and* by role, not just by shrinking one layout
+  - **Identified gap**: no "bottom navigation"/"tab bar" component exists
+    anywhere in the installed package (checked README text and grepped
+    compiled CSS for `bottom-nav`/`tab-bar` classes — none). BottomNav is
+    composed entirely from existing verified primitives instead of an
+    invented class: `ux4g-fixed`/`ux4g-bottom-0`/`ux4g-inset-x-0`/
+    `ux4g-z-40` (positioning), `ux4g-bt-1` (top border, token-driven),
+    `ux4g-jc-around`/`ux4g-ai-center`/`ux4g-gap-3xs` (layout), the
+    typography scale, and `.ux4g-icon-outlined` icon glyphs
+  - **Icon names verified by extracting the actual embedded font**, not
+    assumed from naming convention: decoded the base64 `UX4G Material
+    Icons Outlined` font out of the compiled CSS with a small script,
+    loaded it with `fontTools`, and confirmed `home`, `event`,
+    `receipt_long`, `queue`, `info` (the five used) all exist as real
+    glyphs (2183 total) before writing any markup — the README alone only
+    demonstrates 8 icon names, not enough to cover this need
+  - `lib/navigation.ts`: added an optional `icon` field to `NavItem`
+    (populated for `farmerNav` only) and extracted the "longest matching
+    href wins" active-item rule into a shared `getActiveHref` helper, now
+    used by both `NavList` and `BottomNav` instead of being duplicated
+  - Active-state signalling in BottomNav follows the same non-color-only
+    rule as NavList: `aria-current="page"` plus a font-weight change
+    (`ux4g-label-s-strong` vs `-default`), colour via the verified
+    `.ux4g-text-primary` utility class (not an inline hex/hard-coded
+    style)
+  - PWA: added `viewportFit: "cover"` to `app/layout.tsx`'s `viewport`
+    export and one narrowly-scoped custom CSS rule
+    (`app/globals.css` `.bottom-nav { padding-bottom:
+    env(safe-area-inset-bottom) }`) so the bar clears the home
+    indicator/gesture bar on notched Android/iOS devices — UX4G has no
+    utility for device safe-area insets (a platform viewport concern, not
+    a design token; the only existing `env(safe-area-inset-bottom)` in
+    the compiled CSS is scoped to the Date Picker's own dropdown, not
+    reusable)
+  - `<main>` gets `pb-20 lg:pb-0` (Tailwind, structural clearance for the
+    fixed bar — not a token concept) only when `mobileNav="bottom"`
+  - Fixed a second landmark issue caught during validation: BottomNav
+    initially reused the Sidebar's `aria-label="Primary"`, which meant two
+    identically-labelled `<nav>` landmarks existed in the DOM at once
+    (one hidden via `lg:hidden`/`display:none`, which removes it from
+    modern browsers' accessibility trees, but duplicate labels are still
+    worth avoiding). Relabelled to `"Primary (mobile)"`, matching how
+    NavDrawer was already distinguished from Sidebar
+  - Validated again after every change: `tsc --noEmit` clean, `next lint`
+    clean, `next build` succeeds (same 19 routes, all statically
+    prerendered); dev-server HTML inspection confirmed Farmer routes
+    render both `<aside>` (desktop sidebar) and `.bottom-nav` with no
+    "Menu" button, Operator/Admin routes render `<aside>` and "Menu" with
+    no `.bottom-nav`, all 5 farmer icon ligatures (`home`, `event`,
+    `receipt_long`, `queue`, `info`) appear in the rendered HTML, and
+    active-state markers (`aria-current="page"`) appear exactly twice per
+    page (Sidebar + the visible mobile nav) with no duplicate/incorrect
+    active items
 - **Phase 1 — Next.js + UX4G + Tailwind(layout-only) + PWA foundation:**
   - Next.js 16.3.4 App Router project scaffolded in place (React 19.2.8,
     TypeScript 5, ESLint 9, Tailwind CSS 4) via a scratch-directory
@@ -188,16 +251,30 @@ Phase 2A — Application UI Shell
   pages under a wider permission set, not a separate nav structure. No
   user is modelled as tied to one physical PC — Phase 2A, per explicit
   user instruction; recorded in `lib/navigation.ts` and `app/admin/layout.tsx`
-- Farmer shell uses the NavDrawer at every width (no persistent desktop
-  sidebar) — "significantly simpler than Operator" per instruction, and
-  the only mobile-first-appropriate option since UX4G has no bottom-nav
-  component — Phase 2A
+- **Superseded**: Farmer's mobile nav was originally the same NavDrawer
+  pattern as Operator/Admin at every width. Replaced in the Phase 2A
+  mobile/desktop-adaptation extension with a fixed BottomNav below `lg`
+  (matching the supplied KisanSetu reference), while Farmer gained the
+  same persistent desktop Sidebar every other role has at `lg`+. "Farmer
+  stays simpler than Operator" is now expressed as fewer nav items (5 vs
+  6) and a lighter Header, not as "no sidebar ever" — see `mobileNav` prop
+  in `components/shell/AppShell.tsx`
 - No dedicated vertical/sidebar-nav component exists in UX4G; `List` is
   reused for that purpose, applied to real `Link` elements — Phase 2A, see
   `components/shell/NavList.tsx`
+- No "bottom navigation" component exists in UX4G either (checked README
+  and grepped compiled CSS — confirmed absent); BottomNav composes one
+  from verified layout utilities + icon glyphs instead of inventing a
+  class — Phase 2A, see `components/shell/BottomNav.tsx`
+- Icon ligature names for BottomNav were verified by extracting and
+  inspecting the installed package's actual embedded icon font with
+  fontTools, not assumed from Material Icons naming convention — Phase 2A
 - Skip-link visible-on-focus behaviour needed one narrowly-scoped custom
   CSS rule (UX4G ships `.ux4g-sr-only` but no focus-visible companion) —
   Phase 2A, see `app/globals.css`
+- Device safe-area inset (notch/gesture bar) for BottomNav needed one
+  narrowly-scoped custom CSS rule and `viewportFit: "cover"` — UX4G has no
+  utility for this platform concern — Phase 2A
 
 ## OPEN QUESTIONS
 
@@ -296,11 +373,34 @@ awaiting explicit approval.
   `aria-current="page"` occurrences appeared on `/operator/queue` (bug);
   after the fix, exactly 2 (sidebar + drawer copies of the one correct
   item).
-- Phase 2A: confirmed by direct HTML diff that Farmer routes render no
-  `<aside>` (`variant="simple"` has no persistent sidebar) while Operator
-  routes do.
 - Phase 2A: confirmed the Phase 1 smoke test at `/` still returns HTTP 200
   and still contains its Modal/Button markup — not modified.
+- Phase 2A mobile/desktop-adaptation extension: `tsc --noEmit`, `next
+  lint`, `next build` all re-run and passed clean after every change
+  (three full passes total this extension), same 19 routes.
+- Phase 2A extension: font glyph verification was not assumed — the
+  embedded `UX4G Material Icons Outlined` font was base64-decoded out of
+  the compiled CSS, loaded with fontTools, and its glyph order (2183
+  names) checked directly for `home`, `event`, `receipt_long`, `queue`,
+  `info` before any was used in markup.
+- Phase 2A extension: rendered HTML checked directly for both roles —
+  `/farmer/queue` contains `<aside>`, `.bottom-nav`, all 5 icon ligatures,
+  and no `>Menu<` button; `/operator/queue` contains `<aside>` and
+  `>Menu<` but no `.bottom-nav`; both show exactly 2
+  `aria-current="page"` occurrences (Sidebar + the one visible mobile nav
+  for that role) with the correct item active, not the root Dashboard
+  item.
+- Phase 2A extension: after relabelling BottomNav's landmark, confirmed
+  by direct grep that `/farmer/queue` contains two `<nav
+  aria-label="Primary">`-family landmarks with distinct label text
+  (`"Primary"` on Sidebar, `"Primary (mobile)"` on BottomNav), not
+  duplicates.
+- `.ux4g-ai-center`'s apparent second, `!important`-qualified definition
+  in the compiled CSS was checked in full selector context (not just
+  matched in isolation) before trusting it in BottomNav — confirmed scoped
+  to an unrelated `.ux4g-identity-access-layout-card .ux4g-form-box`
+  compound selector, so it does not affect BottomNav's plain
+  `ux4g-ai-center` usage.
 - Compiled CSS grepped directly (not assumed) before use, twice this
   phase: `.ux4g-list-item-row.active` (confirmed real, bound to
   `--ux4g-bg-primary`/`--ux4g-text-brand-primary-default`) and

@@ -25,6 +25,10 @@ export const viewport: Viewport = {
   // brand colour — the manifest/meta theme-color spec requires a literal
   // hex value and cannot reference a CSS custom property.
   themeColor: "#4A2BC2",
+  // Lets content (BottomNav) draw into the safe area on notched/gesture-bar
+  // devices so its env(safe-area-inset-bottom) padding resolves to a real
+  // value instead of 0 — see app/globals.css .bottom-nav.
+  viewportFit: "cover",
 };
 
 export default function RootLayout({

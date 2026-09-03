@@ -34,3 +34,17 @@
   padding: var(--ux4g-padding-s) var(--ux4g-padding-m);
   border-radius: var(--ux4g-radius-md);
 }
+
+/*
+ * BottomNav safe-area inset — see components/shell/BottomNav.tsx. UX4G has
+ * no utility for a PWA's device safe area (it's a platform viewport
+ * concern, not a design token); the one existing use of
+ * env(safe-area-inset-bottom) in the compiled CSS is scoped to the
+ * Date Picker's own dropdown and isn't a reusable utility. This adds the
+ * device inset on top of the token-driven ux4g-p-xs the bar already has
+ * (app/layout.tsx sets viewportFit: "cover" so the env() value is
+ * non-zero on notched/gesture-bar devices).
+ */
+.bottom-nav {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}

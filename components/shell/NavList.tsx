@@ -2,17 +2,17 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import type { NavItem } from "@/lib/navigation";
+import { getActiveHref, type NavItem } from "@/lib/navigation";
 
 /**
  * Renders one role's nav items as a UX4G List. Used twice per role shell
- * (persistent desktop Sidebar + mobile NavDrawer) so it owns the one
- * "which item is current" computation instead of duplicating it.
+ * (persistent desktop Sidebar + mobile NavDrawer).
  *
  * Client Component: needs the current path (usePathname) to mark the
- * active item. This is the only piece of the shell that needs to be
- * client-side — Header, Sidebar, NavDrawer, PageContainer and PageHeader
- * all stay Server Components and simply render this in a slot.
+ * active item, via the shared `getActiveHref` in lib/navigation.ts (also
+ * used by BottomNav, so the "which item is current" rule lives in one
+ * place). Header, Sidebar, NavDrawer, PageContainer and PageHeader stay
+ * Server Components and simply render this in a slot.
  *
  * UX4G note: there is no dedicated vertical/sidebar-nav component in
  * Design.md §12's parity table. List (`ux4g-list` / `ux4g-list-item` /
@@ -25,17 +25,7 @@ import type { NavItem } from "@/lib/navigation";
  */
 export default function NavList({ items }: { items: NavItem[] }) {
   const pathname = usePathname();
-
-  // "Best match wins": without this, a root item like href="/operator"
-  // would prefix-match every one of its own sub-routes (`/operator/queue`
-  // starts with "/operator/") and show as active alongside the actual
-  // current item. Picking the longest matching href resolves that
-  // generically instead of special-casing the root path.
-  const activeHref = items
-    .filter(
-      (item) => pathname === item.href || pathname?.startsWith(`${item.href}/`)
-    )
-    .sort((a, b) => b.href.length - a.href.length)[0]?.href;
+  const activeHref = getActiveHref(items, pathname);
 
   return (
     <ul className="ux4g-list ux4g-list-default ux4g-list-m">

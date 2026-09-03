@@ -17,7 +17,7 @@ export default function AdminLayout({
       role="admin"
       roleLabel="Admin"
       navItems={adminNav}
-      variant="sidebar"
+      mobileNav="drawer"
     >
       {children}
     </AppShell>

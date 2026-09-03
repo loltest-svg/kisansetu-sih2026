@@ -11,7 +11,7 @@ export default function OperatorLayout({
       role="operator"
       roleLabel="Operator"
       navItems={operatorNav}
-      variant="sidebar"
+      mobileNav="drawer"
     >
       {children}
     </AppShell>

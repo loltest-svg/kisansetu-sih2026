@@ -1,32 +1,41 @@
 import Header from "@/components/shell/Header";
 import Sidebar from "@/components/shell/Sidebar";
 import NavDrawer from "@/components/shell/NavDrawer";
+import BottomNav from "@/components/shell/BottomNav";
 import type { NavItem } from "@/lib/navigation";
 
 /**
- * Reusable application shell — Header + (desktop Sidebar | mobile
- * NavDrawer) + main content slot. One shell, three role layouts
- * (app/farmer, app/operator, app/admin) each pass their own nav items,
- * role label and variant; nothing here is role-specific beyond that.
+ * Reusable application shell — Header + persistent desktop Sidebar (every
+ * role, `lg:block`) + a role-appropriate mobile nav + main content slot.
+ * One shell, three role layouts (app/farmer, app/operator, app/admin) each
+ * pass their own nav items, role label and `mobileNav`.
  *
- * variant "sidebar": persistent desktop Sidebar, NavDrawer below `lg`.
- * variant "simple": NavDrawer at every width, no persistent Sidebar —
- * Farmer only, per the "significantly simpler than Operator" decision.
+ * The layout intentionally differs by breakpoint rather than just scaling
+ * down: at `lg` and up every role gets the same persistent Sidebar; below
+ * it, Farmer gets a fixed BottomNav (the KisanSetu reference's mobile
+ * pattern — a consumer-app-shaped 5-item tab bar suits Farmer's short,
+ * flat nav) while Operator/Admin keep the Header-triggered NavDrawer (more
+ * appropriate for a longer "operational software" nav list, and the
+ * pattern already verified working in Phase 2A). NavDrawer is still
+ * mounted for `mobileNav="bottom"` too — Escape/overlay-click affordances
+ * cost nothing extra — but nothing opens it in that mode, since Header
+ * hides its trigger button.
  *
- * Tailwind here is structural only (`lg:flex`, `flex-1`) — see
- * docs/UX4G.md "Tailwind boundary".
+ * Tailwind here is structural only (`lg:flex`, `flex-1`, bottom padding to
+ * clear the fixed BottomNav on mobile) — see docs/UX4G.md "Tailwind
+ * boundary".
  */
 export default function AppShell({
   role,
   roleLabel,
   navItems,
-  variant,
+  mobileNav,
   children,
 }: {
   role: "farmer" | "operator" | "admin";
   roleLabel: string;
   navItems: NavItem[];
-  variant: "sidebar" | "simple";
+  mobileNav: "bottom" | "drawer";
   children: React.ReactNode;
 }) {
   const homeHref = `/${role}`;
@@ -41,16 +50,27 @@ export default function AppShell({
         Skip to main content
       </a>
 
-      <Header homeHref={homeHref} roleLabel={roleLabel} />
+      <Header
+        homeHref={homeHref}
+        roleLabel={roleLabel}
+        showMenuButton={mobileNav === "drawer"}
+      />
 
       <div className="lg:flex flex-1">
-        {variant === "sidebar" ? <Sidebar items={navItems} /> : null}
-        <main id="main-content" className="flex-1">
+        <Sidebar items={navItems} />
+        <main
+          id="main-content"
+          className={`flex-1${mobileNav === "bottom" ? " pb-20 lg:pb-0" : ""}`}
+        >
           {children}
         </main>
       </div>
 
-      <NavDrawer items={navItems} title={`${roleLabel} menu`} />
+      {mobileNav === "bottom" ? (
+        <BottomNav items={navItems} />
+      ) : (
+        <NavDrawer items={navItems} title={`${roleLabel} menu`} />
+      )}
     </div>
   );
 }

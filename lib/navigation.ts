@@ -20,14 +20,20 @@
 export type NavItem = {
   label: string;
   href: string;
+  /** Material icon ligature name for BottomNav (Farmer only — Sidebar/
+   * NavDrawer render text only, via NavList). Every value here was
+   * verified to exist as a real glyph in the installed package's own
+   * embedded `UX4G Material Icons Outlined` font (extracted and inspected
+   * with fontTools, not assumed from naming convention) before use. */
+  icon?: string;
 };
 
 export const farmerNav: NavItem[] = [
-  { label: "Dashboard", href: "/farmer" },
-  { label: "New Booking", href: "/farmer/new-booking" },
-  { label: "My Bookings", href: "/farmer/bookings" },
-  { label: "Live Queue", href: "/farmer/queue" },
-  { label: "Centre Status", href: "/farmer/status" },
+  { label: "Dashboard", href: "/farmer", icon: "home" },
+  { label: "New Booking", href: "/farmer/new-booking", icon: "event" },
+  { label: "My Bookings", href: "/farmer/bookings", icon: "receipt_long" },
+  { label: "Live Queue", href: "/farmer/queue", icon: "queue" },
+  { label: "Centre Status", href: "/farmer/status", icon: "info" },
 ];
 
 /** Centre-operations navigation — shared shape for Operator today and a
@@ -49,3 +55,22 @@ export const adminNav: NavItem[] = [
   { label: "Capacity & Congestion", href: "/admin/capacity" },
   { label: "System Activity", href: "/admin/activity" },
 ];
+
+/**
+ * "Longest matching href wins" — shared by NavList and BottomNav so the
+ * active-item rule lives in exactly one place. Without this, a role's
+ * root item (href `/operator`) would prefix-match every one of its own
+ * sub-routes (`/operator/queue` starts with `/operator/`) and show active
+ * everywhere (a real bug caught in Phase 2A validation).
+ */
+export function getActiveHref(
+  items: NavItem[],
+  pathname: string | null
+): string | undefined {
+  if (!pathname) return undefined;
+  return items
+    .filter(
+      (item) => pathname === item.href || pathname.startsWith(`${item.href}/`)
+    )
+    .sort((a, b) => b.href.length - a.href.length)[0]?.href;
+}
