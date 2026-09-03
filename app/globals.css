@@ -11,3 +11,26 @@
  * token the design system already owns.
  */
 @import "tailwindcss";
+
+/*
+ * Skip-link visible-on-focus override — see components/shell/AppShell.tsx.
+ * UX4G ships `.ux4g-sr-only` (permanently hidden) but no focus-visible
+ * companion for the standard "visible when focused" skip-link pattern;
+ * this narrowly-scoped rule fills that one gap. Every value is a UX4G
+ * token (Design.md §5/§1), nothing hard-coded.
+ */
+.skip-link:focus {
+  position: fixed;
+  clip: auto;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  white-space: normal;
+  top: var(--ux4g-padding-s);
+  left: var(--ux4g-padding-s);
+  z-index: 1002;
+  background-color: var(--ux4g-bg-neutral-elevated);
+  color: var(--ux4g-text-neutral-primary);
+  padding: var(--ux4g-padding-s) var(--ux4g-padding-m);
+  border-radius: var(--ux4g-radius-md);
+}

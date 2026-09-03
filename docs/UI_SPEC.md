@@ -1,6 +1,34 @@
 # UI Specification
 
-`PLANNED` — no screens are implemented yet. This document specifies intent.
+`PLANNED` for content — screens are not implemented yet (Phase 2B+). The
+reusable shell (Header, Sidebar, NavDrawer, PageContainer, PageHeader) and
+the routes below **are** implemented as of Phase 2A — see
+`docs/PROJECT_STATE.md`. Routes:
+
+| Role | Route | Nav label |
+|---|---|---|
+| Farmer | `/farmer` | Dashboard |
+| Farmer | `/farmer/new-booking` | New Booking |
+| Farmer | `/farmer/bookings` | My Bookings |
+| Farmer | `/farmer/queue` | Live Queue |
+| Farmer | `/farmer/status` | Centre Status |
+| Operator | `/operator` | Dashboard |
+| Operator | `/operator/queue` | Live Queue |
+| Operator | `/operator/processing` | Farmer Processing |
+| Operator | `/operator/bookings` | Bookings |
+| Operator | `/operator/capacity` | Capacity & Slots |
+| Operator | `/operator/status` | Centre Status |
+| Admin | `/admin` | Overview |
+| Admin | `/admin/centres` | Centres |
+| Admin | `/admin/capacity` | Capacity & Congestion |
+| Admin | `/admin/activity` | System Activity |
+
+Source of truth for these is `lib/navigation.ts`, not this table — if they
+ever diverge, the code wins and this table needs updating. Every route
+currently renders `PageHeader` + `ComingSoon` only (no fabricated data);
+this document specifies what each screen becomes in a later phase.
+
+This document, below, specifies intent for that later content.
 Component names are checked against `docs/UX4G.md` / `Design.md` §12's
 verified parity table; anything not verified is marked
 `TODO — VERIFY DURING PHASE 1`. No exact variant/size is locked here — that
