@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Next.js
+.next/
+out/
+build/
+dist/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+
+# Supabase local dev
+.supabase/
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Testing
+coverage/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor / OS
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Vercel
+.vercel
+
+# PWA generated
+public/sw.js
+public/workbox-*.js
+public/worker-*.js
+public/fallback-*.js
