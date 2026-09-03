@@ -28,12 +28,21 @@ export type NavItem = {
   icon?: string;
 };
 
+/**
+ * `PHASE 2C ROUTE CHANGE`: `New Booking` moved from `/farmer/new-booking`
+ * to `/farmer/bookings/new` (nested under My Bookings) and `Centre Status`
+ * moved from `/farmer/status` to `/farmer/centre` (renamed "My Centre") —
+ * per explicit Phase 2C routing instructions. `getActiveHref`'s "longest
+ * match wins" rule (below) already handles `/farmer/bookings` vs.
+ * `/farmer/bookings/new` correctly without any special-casing, since
+ * that's exactly the ambiguity it exists to resolve.
+ */
 export const farmerNav: NavItem[] = [
   { label: "Dashboard", href: "/farmer", icon: "home" },
-  { label: "New Booking", href: "/farmer/new-booking", icon: "event" },
   { label: "My Bookings", href: "/farmer/bookings", icon: "receipt_long" },
+  { label: "New Booking", href: "/farmer/bookings/new", icon: "event" },
   { label: "Live Queue", href: "/farmer/queue", icon: "queue" },
-  { label: "Centre Status", href: "/farmer/status", icon: "info" },
+  { label: "My Centre", href: "/farmer/centre", icon: "info" },
 ];
 
 /** Centre-operations navigation — shared shape for Operator today and a

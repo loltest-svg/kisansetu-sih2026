@@ -2,7 +2,7 @@
 
 ## CURRENT PHASE
 
-Phase 2B — Operator / Centre Operations Dashboard (UI only)
+Phase 2C — Farmer Dashboard & Farmer Experience (UI only)
 
 ## COMPLETED
 
@@ -13,8 +13,135 @@ Phase 2B — Operator / Centre Operations Dashboard (UI only)
   initialized, checkpoint committed)
 - Phase 1 Next.js + UX4G + Tailwind(layout-only) + PWA foundation (see
   below for full detail; unchanged this phase, still verified working)
-- UX4G `SKILL.md` read completely (five times — Phase 0, 0.5, 1, 2A, 2B)
-- UX4G `Design.md` read completely (five times — Phase 0, 0.5, 1, 2A, 2B)
+- UX4G `SKILL.md` read completely (six times — Phase 0, 0.5, 1, 2A, 2B, 2C)
+- UX4G `Design.md` read completely (six times — Phase 0, 0.5, 1, 2A, 2B, 2C)
+- **Phase 2C — Farmer Dashboard & Farmer Experience, UI only:**
+  - **Route restructure** (per explicit Phase 2C instructions, not a
+    silent change): `/farmer/new-booking` → `/farmer/bookings/new`
+    (nested under My Bookings) and `/farmer/status` → `/farmer/centre`
+    (relabelled "My Centre"). Done as real `git mv`s, not
+    delete+recreate, so history is preserved. `lib/navigation.ts` and
+    `docs/UI_SPEC.md`'s route table updated in the same change; grepped
+    the whole repo afterward for the old paths to confirm nothing still
+    pointed at them.
+  - All 5 Farmer routes now render real content: `/farmer` (dashboard),
+    `/farmer/bookings` (booking history), `/farmer/bookings/new` (booking
+    form), `/farmer/queue` (live queue view), `/farmer/centre` (centre
+    details) — replacing every Phase 2A `ComingSoon` on the Farmer tree.
+  - New components under `components/farmer/`: `NextStepCard`,
+    `FarmerCentreStatusCard`, `QuickActions`, `PaymentStatusCard`,
+    `RecentNotifications`, `BookingCard`, `BookingList`,
+    `QueueStatusCard`, `CentreDetailsCard`, `BookingForm`.
+  - **Two components promoted to `components/shared/`** because they
+    turned out to be genuinely role-agnostic, not Operator-specific:
+    `WorkflowStepper` (moved from `components/operator/`, Phase 2B) is
+    now used by both the Operator dashboard's Current Processing card and
+    the Farmer dashboard's Procurement Progress section, with its prop
+    type changed from importing `ProcessingStage` out of
+    `lib/demo/operatorDashboard.ts` to a structural local `WorkflowStage`
+    type so neither role's demo module depends on the other's. Likewise
+    `OperationalMetricCard` moved and was renamed `MetricCard`, now used
+    by Operator's KPI row and Farmer's "Farmers ahead"/"Estimated wait"
+    stats. `app/operator/page.tsx`'s two import lines and JSX tag names
+    were updated to match — the only Phase 2B file touched this phase,
+    and only for this reason.
+  - **Demo-data strategy**: `lib/demo/farmerDashboard.ts`, same pattern as
+    `lib/demo/operatorDashboard.ts` (Phase 2B) — one file, file-level
+    "PRESENTATION-ONLY DEMO DATA" banner comment, types shaped to match
+    docs/DATABASE.md's proposed entities. Every Farmer page carries a
+    visible "Demo data — not connected to a backend" tag (dashboard,
+    queue) or an equivalent inline note (QueueStatusCard's own footnote,
+    the New Booking form's info alert) — not just a code comment.
+  - **New Booking form is honest about being non-functional**: submitting
+    shows an explicit "This is a demo — no booking was created" message
+    (`ux4g-alert-success`) instead of a fake confirmation screen. An info
+    alert above the form states plainly that a real system would
+    recommend a centre/slot automatically via the Smart Allocation Engine
+    (not built here) rather than the farmer picking one manually — form
+    fields chosen specifically to match Business Logic's documented
+    allocation-engine inputs (centre, date, slot, crop, quantity) so a
+    real implementation could sit behind the same fields later.
+  - Quality Check is described on the dashboard as "assessed by centre
+    staff when you arrive — this screen only shows where you are in the
+    process, it does not decide quality itself" — directly satisfies the
+    phase's explicit requirement that the app never implies it makes the
+    final quality decision (docs/BUSINESS_LOGIC.md's existing advisory-
+    only rule, now also stated in-product, not just in docs).
+  - Payment status card shows status only (`PENDING`/`PROCESSED`) with an
+    explicit "payment itself is handled outside this application" line —
+    no amount, no bank details, no "pay now" action anywhere.
+  - Live Queue (`/farmer/queue`) shows only the farmer's own token,
+    position, and aggregate counts (farmers ahead, estimated wait,
+    processing rate, which token is currently being processed) — never
+    other farmers' names or tokens, per docs/SECURITY.md.
+  - **UX4G finding, significant**: the README's Input example
+    (`<div class="ux4g-input-container ..."><label/><input/></div>`) is
+    missing a wrapper the *compiled* CSS actually requires. Confirmed by
+    reading the compiled CSS directly:
+    `.ux4g-input-md .ux4g-input{height:2.5rem}` and
+    `.ux4g-input-error .ux4g-input{border-color:...}` both target a
+    `.ux4g-input` element that the README's flat example never includes,
+    and the actual field itself needs class `ux4g-input-input` (not a
+    bare `<input>`). Every new field in `BookingForm.tsx` uses the full
+    verified structure (`ux4g-input-container` > `.ux4g-input` >
+    `ux4g-input-input`). **Not fixed this phase**: the Phase 1 smoke-test
+    input and any other pre-2C input predate this discovery and still use
+    the flatter, likely under-styled structure — flagged as a known
+    limitation below rather than silently left broken or silently patched
+    outside this phase's stated scope.
+  - **Second UX4G finding**: `.ux4g-select` and `.ux4g-dropdown` both
+    exist as more elaborate custom widgets in the compiled CSS (search/
+    filter logic, `data-ux-*` attributes, an `.ux4g-select-caret` element)
+    with no README documentation at all for `.ux4g-select` and only a
+    trivial example for Dropdown. Rather than guess at an undocumented
+    contract (same reasoning as Phase 2B's `ux4g-progress-circle`
+    decision), the booking form's three selects use native `<select>`
+    elements inside the verified `ux4g-input-container`/`.ux4g-input`
+    wrapper instead — fully accessible, fully functional, zero guessed
+    markup. Same reasoning for "Preferred date": Date Picker's
+    `ux4g-date-picker-input` is documented `readonly`, implying it needs
+    JS to become usable, but Date Picker is not in the runtime's
+    documented Behaviors Provided list (Phase 1) — so a readonly text
+    field styled that way would be inert. Used a native
+    `<input type="date">` instead, same wrapper.
+  - Icons throughout (`QuickActions`, BottomNav reused unchanged) use only
+    the 5 ligature names already verified via fontTools in the Phase 2A
+    mobile-nav extension (`home`, `event`, `receipt_long`, `queue`,
+    `info`) — no new icon names introduced.
+  - Farmer language kept plain throughout, matching the phase's explicit
+    examples: "Farmers ahead" / "Estimated wait" / "Centre status", never
+    the technical alternatives the instructions warned against.
+  - Validated: `tsc --noEmit`, `next lint`, `next build` all clean (one
+    stale-`.next`-cache TypeScript error from the route rename, resolved
+    by deleting the git-ignored `.next/` directory and rebuilding — not a
+    real code problem). All 19 routes still statically prerender, now
+    listing `/farmer/bookings/new` and `/farmer/centre` instead of the old
+    paths.
+  - Dev-server HTML inspection of all 5 Farmer routes: exactly one `<h1>`
+    each; zero `<table>` elements anywhere; every `<button>` has an
+    explicit `type`; all 5 booking-form fields have correct `label`/`for`
+    association; the `.ux4g-input`/`ux4g-input-input` structure renders as
+    written; `/farmer/bookings/new` correctly shows "New Booking" active
+    in navigation, not "My Bookings" (confirms the shared
+    `getActiveHref` "longest match wins" rule handles the new nested
+    route without modification); BottomNav's landmark stays uniquely
+    labelled (`"Primary (mobile)"`, distinct from Sidebar's `"Primary"` —
+    unchanged from the Phase 2A extension, re-verified here); all 7
+    workflow stage labels render twice each on the dashboard (desktop +
+    mobile dual-render, same verified pattern as Operator's).
+  - Confirmed Phase 1's smoke test (`/`), Phase 2B's `/operator`
+    dashboard, and the Admin shell (`/admin`) all still return HTTP 200
+    and render their expected content, unmodified by this phase (aside
+    from the one documented `WorkflowStepper`/`MetricCard` import-path
+    change in `app/operator/page.tsx`).
+  - **Not literally screenshotted** at 1440/1280/1024/390/430px — same
+    tooling limitation as Phase 2B (no browser/screenshot tool available
+    in this environment). Verified instead via rendered-HTML inspection
+    and reasoning from the actual CSS rules used (flex-wrap throughout,
+    `grid-cols-*` only via the `lg:` breakpoint, `pb-20 lg:pb-0` on
+    `<main>` already proven in Phase 2A to clear BottomNav, no fixed
+    pixel widths introduced anywhere in this phase's new code). Flagged
+    here rather than presented as visually confirmed.
 - **Phase 2B — Operator / Centre Operations Dashboard, UI only:**
   - `/operator` now renders the real dashboard (`app/operator/page.tsx`),
     replacing the Phase 2A `ComingSoon` placeholder. Everything else in
@@ -299,21 +426,25 @@ Phase 2B — Operator / Centre Operations Dashboard (UI only)
 
 ## CURRENT REPOSITORY STATE
 
-- Application: **scaffolded**, reusable UI shell **plus one real screen**
-  (`/operator`) — Next.js App Router, TypeScript, same 19 routes, builds
-  and lints clean
+- Application: **scaffolded**, reusable UI shell **plus two real screen
+  groups** (`/operator`, all of `/farmer/*`) — Next.js App Router,
+  TypeScript, same 19 routes (2 farmer route paths renamed this phase),
+  builds and lints clean
 - Backend: **not configured** (no Supabase project connected — correctly
-  out of scope through Phase 2B)
+  out of scope through Phase 2C)
 - Database: **not created** (no tables, no migrations)
-- UI: `/operator` is a real, UI-only dashboard backed by local demo state
-  (`lib/demo/operatorDashboard.ts`). Every other role screen
-  (`/farmer/*`, `/admin/*`, and `/operator`'s own sub-routes like
-  `/operator/queue`) is still `ComingSoon` — Phase 2B touched only
-  `/operator` itself, per its stated scope
+- UI: `/operator` (Phase 2B) and all 5 `/farmer/*` routes (Phase 2C) are
+  real, UI-only screens backed by local demo state
+  (`lib/demo/operatorDashboard.ts`, `lib/demo/farmerDashboard.ts`). Every
+  Admin screen and every `/operator` sub-route (e.g. `/operator/queue`,
+  distinct from the `/operator` dashboard itself) is still `ComingSoon`
 - Auth: **not implemented** — role trees are separate route namespaces
   reached by URL, not gated by any login
-- New repository content since Phase 2A: `components/operator/*` (10
-  files), `lib/demo/operatorDashboard.ts`, rewritten `app/operator/page.tsx`
+- New repository content since Phase 2B: `components/farmer/*` (10
+  files), `components/shared/*` (`WorkflowStepper`, `MetricCard` — both
+  moved out of `components/operator/`), `lib/demo/farmerDashboard.ts`,
+  rewritten `app/farmer/*` (route paths changed, see Phase 2C completed
+  work above), one import-path edit in `app/operator/page.tsx`
 
 ## DECISIONS
 
@@ -401,6 +532,31 @@ Phase 2B — Operator / Centre Operations Dashboard (UI only)
   contradictory: the 7-stage view is display/context, the 5-stage subset
   remains what an operator can actually act on — Phase 2B, doc updated in
   the same change
+- Farmer route rename: `/farmer/new-booking` → `/farmer/bookings/new`,
+  `/farmer/status` → `/farmer/centre` — Phase 2C, per explicit
+  instruction; `lib/navigation.ts` and `docs/UI_SPEC.md` updated in the
+  same change, whole repo grepped afterward for stale references
+- `WorkflowStepper` and `MetricCard` (renamed from `OperationalMetricCard`)
+  promoted from `components/operator/` to `components/shared/` — Phase 2C,
+  once a second role (Farmer) needed the same generic components; neither
+  changed behaviour, only location/import path (and, for `MetricCard`,
+  name)
+- BookingForm's New Booking submit shows an explicit "demo, no booking
+  created" message rather than a fake success screen — Phase 2C, Data
+  Honesty
+- Booking form uses native `<select>`/`<input type="date">` instead of
+  UX4G's `ux4g-select`/Dropdown/Date Picker components — those exist but
+  are undocumented-in-README custom widgets (search/filter logic, `data-
+  ux-*` attributes) or, for Date Picker, not in the runtime's documented
+  Behaviors Provided list; native controls are fully functional and
+  accessible with zero guessed markup — Phase 2C
+- **UX4G Input structure gap found**: the documented README Input example
+  omits a `.ux4g-input`/`ux4g-input-input` wrapper the compiled CSS
+  actually requires for correct border/height/focus styling. All Phase 2C
+  form fields use the corrected structure; Phase 1/2A's existing inputs do
+  not (not retroactively touched this phase, since Phase 2C's scope was
+  Farmer-only) — flagged as a known limitation, recommended for a later
+  cleanup pass
 
 ## OPEN QUESTIONS
 
@@ -473,19 +629,38 @@ Phase 2B — Operator / Centre Operations Dashboard (UI only)
   screenshots. Worth a real visual pass (browser devtools or the `run`
   skill, if it supports viewport resizing) before this is called
   demo-ready, not just build-clean.
+- **Phase 2C**: same no-screenshot-tool limitation applies to the Farmer
+  routes — see Phase 2C completed work above. This is now a
+  cross-cutting gap (Phase 2B and 2C both), not a one-off, and should be
+  resolved (real browser check) before any of this is called demo-ready.
+- **Phase 2C**: the Input structure gap (missing `.ux4g-input`/
+  `ux4g-input-input` wrapper) affects every input built before this
+  phase's discovery — the Phase 1 smoke test's two inputs, and nothing
+  else, since Phase 2B's operator dashboard used Textarea (a different,
+  correctly-simple component) rather than Input. Worth a small follow-up
+  pass to add the wrapper there too, though it's cosmetic (likely
+  under-styled height/border, not a functional break) rather than urgent.
+- **Phase 2C**: `ux4g-select` and Date Picker's real interactive contracts
+  were not implemented (native controls used instead — see Decisions
+  above) — if a future phase wants the UX4G-branded versions specifically,
+  their actual DOM/JS contract still needs to be reverse-engineered from
+  the compiled CSS and runtime source, the README does not cover it.
 
 ## NEXT PHASE
 
-Phase 2C — remaining scope, in whatever order is approved next: Farmer
-dashboard real content, Master Admin dashboard real content, and/or
-Supabase backend setup (auth, RLS, schema) per the Recommended Build Order
-(Phase 0 report). Phase 2B's instructions were explicit that none of these
-start without separate approval — not started.
+Phase 2D — remaining scope, in whatever order is approved next: Master
+Admin dashboard real content, and/or Supabase backend setup (auth, RLS,
+schema) per the Recommended Build Order (Phase 0 report). Also worth
+considering before further UI phases: a real browser/visual check of
+Phase 2B and 2C's responsive claims (see Known Issues), and the small
+Input-wrapper fix for the Phase 1 smoke test. Phase 2C's instructions were
+explicit that Master Admin/Supabase/auth/RLS/allocation/Realtime/SMS/
+payment don't start without separate approval — none started.
 
 ## LAST VERIFIED
 
-- `.claude/skills/ux4g-design/SKILL.md` and `Design.md`: read in full five
-  times (Phase 0, 0.5, 1, 2A, 2B); content unchanged between reads.
+- `.claude/skills/ux4g-design/SKILL.md` and `Design.md`: read in full six
+  times (Phase 0, 0.5, 1, 2A, 2B, 2C); content unchanged between reads.
 - Phase 1: `npm view ux4g-web-components version` → `2.0.1`, matching
   Design.md §0's recorded npm version at time of writing.
 - Phase 1: `tsc --noEmit`, `next lint`, `next build` all run and passed
@@ -568,3 +743,26 @@ start without separate approval — not started.
 - Phase 2B: confirmed the Phase 1 smoke test (`/`) and the Farmer
   (`/farmer`) and Admin (`/admin`) shells still return HTTP 200 and were
   not modified by this phase's changes.
+- Phase 2C: `tsc --noEmit`, `next lint`, `next build` all run and passed
+  clean after deleting a stale `.next/` cache (git-ignored build output
+  referencing the pre-rename route paths — not a code defect); all 19
+  routes still statically prerender, now listing `/farmer/bookings/new`
+  and `/farmer/centre`.
+- Phase 2C: all 5 Farmer routes checked directly via `curl` — all return
+  HTTP 200. Rendered HTML for every one inspected directly: exactly one
+  `<h1>` each; zero `<table>` elements across all 5; every `<button>`
+  carries an explicit `type`; all 5 New Booking form fields have correct
+  `label`/`for` pairs; the corrected `.ux4g-input`/`ux4g-input-input`
+  structure renders as written (`grep` confirmed on both a `<select>` and
+  an `<input type="date">` field); `/farmer/bookings/new` shows "New
+  Booking" active in nav, not "My Bookings" (confirms the shared
+  `getActiveHref` rule needed no changes for the new nested route);
+  BottomNav's `aria-label="Primary (mobile)"` stays distinct from
+  Sidebar's `"Primary"`; all 7 workflow stage labels appear twice on the
+  dashboard (desktop + mobile dual-render).
+- Phase 2C: confirmed the Phase 1 smoke test (`/`), the Operator dashboard
+  (`/operator`), and the Admin shell (`/admin`) all still return HTTP 200
+  and render their expected content — the one intentional touch to a
+  Phase 2B file (`app/operator/page.tsx`'s `MetricCard`/`WorkflowStepper`
+  import paths) did not change its rendered output, confirmed by grepping
+  for `"Centre Operations Dashboard"` in the response.

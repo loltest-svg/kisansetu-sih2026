@@ -1,4 +1,4 @@
-import WorkflowStepper from "@/components/operator/WorkflowStepper";
+import WorkflowStepper from "@/components/shared/WorkflowStepper";
 import type { ProcessingStage, QueueItem } from "@/lib/demo/operatorDashboard";
 
 /**

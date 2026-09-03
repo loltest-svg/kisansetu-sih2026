@@ -1,4 +1,7 @@
-import type { ProcessingStage } from "@/lib/demo/operatorDashboard";
+/** Structural, not tied to any one demo module's type — both
+ * lib/demo/operatorDashboard.ts and lib/demo/farmerDashboard.ts define
+ * their own `ProcessingStage`-shaped stage list and both satisfy this. */
+export type WorkflowStage = { key: string; label: string };
 
 /**
  * Renders the procurement workflow as a UX4G Stepper. Two instances are
@@ -15,16 +18,16 @@ import type { ProcessingStage } from "@/lib/demo/operatorDashboard";
  * stepper conveys sequence/position information a screen reader can't
  * infer from unstyled divs alone.
  *
- * This is a display of *nominal* stage/position — see
- * lib/demo/operatorDashboard.ts: it does not assert every earlier stage
- * genuinely completed for a real record, because there is no real record
- * yet.
+ * This is a display of *nominal* stage/position — it does not assert every
+ * earlier stage genuinely completed for a real record, because there is no
+ * real record yet (see the calling demo-data module, e.g.
+ * lib/demo/operatorDashboard.ts or lib/demo/farmerDashboard.ts).
  */
 export default function WorkflowStepper({
   stages,
   currentIndex,
 }: {
-  stages: ProcessingStage[];
+  stages: WorkflowStage[];
   currentIndex: number;
 }) {
   const renderSteps = () =>

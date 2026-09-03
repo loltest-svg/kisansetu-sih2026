@@ -8,10 +8,10 @@ the routes below **are** implemented as of Phase 2A — see
 | Role | Route | Nav label |
 |---|---|---|
 | Farmer | `/farmer` | Dashboard |
-| Farmer | `/farmer/new-booking` | New Booking |
 | Farmer | `/farmer/bookings` | My Bookings |
+| Farmer | `/farmer/bookings/new` | New Booking |
 | Farmer | `/farmer/queue` | Live Queue |
-| Farmer | `/farmer/status` | Centre Status |
+| Farmer | `/farmer/centre` | My Centre |
 | Operator | `/operator` | Dashboard |
 | Operator | `/operator/queue` | Live Queue |
 | Operator | `/operator/processing` | Farmer Processing |
@@ -24,9 +24,12 @@ the routes below **are** implemented as of Phase 2A — see
 | Admin | `/admin/activity` | System Activity |
 
 Source of truth for these is `lib/navigation.ts`, not this table — if they
-ever diverge, the code wins and this table needs updating. Every route
-currently renders `PageHeader` + `ComingSoon` only (no fabricated data);
-this document specifies what each screen becomes in a later phase.
+ever diverge, the code wins and this table needs updating. `/farmer/*` and
+`/operator` routes now render real content (Phase 2C, Phase 2B — see
+`docs/PROJECT_STATE.md`); every other route still renders `PageHeader` +
+`ComingSoon` only (no fabricated data). Farmer route paths changed in
+Phase 2C (`/farmer/new-booking` → `/farmer/bookings/new`, `/farmer/status`
+→ `/farmer/centre`) per explicit routing instructions that phase.
 
 This document, below, specifies intent for that later content.
 Component names are checked against `docs/UX4G.md` / `Design.md` §12's

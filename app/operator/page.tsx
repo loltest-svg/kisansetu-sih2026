@@ -5,7 +5,7 @@ import Link from "next/link";
 import PageContainer from "@/components/shell/PageContainer";
 import PageHeader from "@/components/shell/PageHeader";
 import CentreStatusCard from "@/components/operator/CentreStatusCard";
-import OperationalMetricCard from "@/components/operator/OperationalMetricCard";
+import MetricCard from "@/components/shared/MetricCard";
 import CurrentProcessingCard from "@/components/operator/CurrentProcessingCard";
 import LiveQueue from "@/components/operator/LiveQueue";
 import CapacityCard from "@/components/operator/CapacityCard";
@@ -143,17 +143,17 @@ export default function OperatorDashboardPage() {
         />
 
         <div className="grid grid-cols-2 lg:grid-cols-4 ux4g-gap-m">
-          <OperationalMetricCard
+          <MetricCard
             label="Farmers waiting"
             value={queue.filter((q) => q.status === "WAITING").length}
           />
-          <OperationalMetricCard label="Processing now" value={processingNow} />
-          <OperationalMetricCard
+          <MetricCard label="Processing now" value={processingNow} />
+          <MetricCard
             label="Today's capacity"
             value={demoMetrics.todaysCapacityQuintal}
             unit="Quintal"
           />
-          <OperationalMetricCard
+          <MetricCard
             label="Remaining capacity"
             value={demoCapacity.remainingQuintal}
             unit="Quintal"

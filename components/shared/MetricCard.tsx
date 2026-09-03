@@ -1,10 +1,11 @@
 /**
- * One KPI card — reused for every value in the "Key Operational Metrics"
- * row (farmers waiting, remaining capacity, processing rate, etc). Kept
- * generic and data-free on purpose: it renders whatever numbers the page
- * passes it, it doesn't know where they come from.
+ * One KPI card — a plain, role-agnostic value display. Used across the
+ * Operator dashboard's "Key Operational Metrics" row (Phase 2B) and the
+ * Farmer dashboard's "Farmers Ahead"/"Estimated Wait" stats (Phase 2C).
+ * Kept generic and data-free on purpose: it renders whatever the caller
+ * passes it, it doesn't know where the numbers come from.
  */
-export default function OperationalMetricCard({
+export default function MetricCard({
   label,
   value,
   unit,
