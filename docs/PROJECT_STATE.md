@@ -2,18 +2,105 @@
 
 ## CURRENT PHASE
 
-Phase 3B — Migration 5 complete (`audit_events`). Built ahead of the RPC
-layer (§18 row 12 formally depends on row 10) per explicit user decision
-when the dependency gap was raised. `OQ-17` remains open, deferred by
-explicit instruction — not populated anywhere in this migration either.
-Stopped after Migration 5 per instruction; awaiting explicit approval
-before Migration 6, which the user has already scoped: `rpc_create_booking`
-+ `rpc_expire_stale_bookings` + `rpc_get_my_queue_position` +
-`rpc_check_in` + `rpc_call_next_farmer` + `rpc_set_centre_status`
-(quality/weighment/procurement/payment RPCs deferred further).
+Phase 3B — Migration 6 complete: the approved RPC subset
+(`rpc_create_booking`, `rpc_expire_stale_bookings`,
+`rpc_get_my_queue_position`, `rpc_check_in`, `rpc_call_next_farmer`,
+`rpc_set_centre_status`). This is the first migration where a client
+(farmer/operator) can actually write data — `bookings`/`centre_status`
+now have a real, working, audited write path for the first time; every
+prior migration's "documented dependency, not built yet" note for these
+two tables is now closed. `OQ-17` remains open, untouched by this
+migration. Quality/weighment/procurement/payment RPCs remain deferred to
+a later migration, per instruction. Stopped after Migration 6 per
+instruction; awaiting explicit approval before Migration 7.
 
 ## COMPLETED
 
+- **Phase 3B — Migration 6 (RPC layer, approved subset):**
+  - `supabase/migrations/20260904131335_rpc_booking_queue_status.sql`.
+    Six functions only, exactly as approved:
+    `rpc_create_booking`, `rpc_expire_stale_bookings`,
+    `rpc_get_my_queue_position`, `rpc_check_in`, `rpc_call_next_farmer`,
+    `rpc_set_centre_status`. All `SECURITY DEFINER`, `search_path=public`
+    pinned, verified live.
+  - **`rpc_create_booking`** (§7.5-§7.6, §14 R-2/R-3): idempotent by
+    `request_id` — a retried identical request returns the same booking,
+    verified live (same `id` on replay). Locks the `slots` row before
+    checking capacity (§14 R-2); admission recomputes `effective_status`
+    inline using the same §6.1 precedence as `recompute_centre_live_state`
+    (Migration 4), reading `centre_status` only when the slot's date is
+    today (OQ-19's resolution, applied consistently here too) — verified
+    live: a centre `PAUSED` today did not block a booking for tomorrow,
+    but did block one for today. Farmer identity is snapshotted from
+    `profiles` server-side, never trusted from the caller; a missing
+    phone number is rejected with a clean error before the `NOT NULL`
+    constraint would otherwise raise a raw one. Token allocation retries
+    on collision (up to 5 attempts, §14 R-3), and separately distinguishes
+    a token collision from the active-booking-invariant violation and the
+    idempotency-race case, translating each into its own clean domain
+    error (or, for the idempotency race, returning the winning row) —
+    never a raw constraint violation (§7.6).
+  - **`rpc_expire_stale_bookings`** (§7.7): scope deliberately narrow —
+    only `CONFIRMED` bookings past their `service_date` move to `EXPIRED`.
+    The second §7.7 case (stale `CHECKED_IN`/`CALLED`/`IN_PROGRESS`) is
+    left untouched, since its grace period (`OQ-14` in `docs/DATABASE.md`
+    §19) is still just a recommendation, not a lock, and this migration's
+    brief said not to invent one. Verified live: a stale `CONFIRMED`
+    booking became `EXPIRED`; a stale `CHECKED_IN` one in the same sweep
+    call was left exactly as it was. `EXECUTE` granted to `service_role`
+    only — verified `authenticated` gets `42501` calling it directly.
+  - **`rpc_get_my_queue_position`** (§7.3, S-12): returns only
+    `ahead_count`/`estimated_wait_minutes` — `now_serving_token` is not
+    part of the return shape at all, per the explicit OQ-17 deferral
+    (the original sketch in `docs/ARCHITECTURE.md` includes it; this is a
+    deliberate omission, not an oversight). Anti-oracle property verified
+    live: a farmer probing a real-but-foreign booking id and a random
+    uuid got the byte-identical error (`P0002: booking not found`, same
+    text and errcode both ways).
+  - **`rpc_check_in`** / **`rpc_call_next_farmer`** (OQ-15, §14 R-1,
+    §7.8): both restricted to Operator/Centre Admin at their own
+    assigned centre — Master Admin is excluded, matching
+    `docs/SECURITY.md` §3's read-only cell for Master Admin on
+    `bookings`/`centre_status` and `docs/PROJECT.md`'s "day-to-day queue
+    actions remain centre-scoped roles' work." OQ-15's exact locked
+    distinction verified live: check-in succeeded while the centre was
+    `PAUSED`; call-next was rejected with a distinct error in the same
+    state. `rpc_call_next_farmer` uses `FOR UPDATE SKIP LOCKED` on the
+    queue head — verified under **genuine concurrency**, not just
+    structurally: two truly parallel calls against a single `CHECKED_IN`
+    booking, one won it, the other correctly got `NULL` (queue looked
+    empty from its side), never a double-call or an error.
+  - **`rpc_set_centre_status`** (§5.1, OQ-9, closes the Migration 2
+    "documented dependency"): Operator/Centre Admin only at their own
+    centre; Master Admin is **not** authorized here either, matching the
+    matrix's "R all" (no W) cell for Master Admin on `centre_status`.
+    `DELAYED` without a reason is rejected before it would otherwise hit
+    the table's own `CHECK` constraint. Every call correctly cascades
+    through all three Migration 2/4/5 triggers automatically (history
+    event, `centre_live_state` recompute, audit row) — verified live in
+    one combined trace.
+  - **Audit coverage verified end-to-end, not assumed**: a full session
+    trace (farmer bookings created, checked in, called; centre status
+    changed through `OPEN→PAUSED→DELAYED`) produced exactly the expected
+    `audit_events` rows, each correctly attributed to the real calling
+    user (`actor_profile_id`/`actor_role_snapshot` populated from
+    `auth.uid()`, since these RPCs run in the caller's own session — no
+    `SET LOCAL app.actor_profile_id` needed here, unlike the scheduled
+    `rpc_expire_stale_bookings`, whose resulting `BOOKING_EXPIRED` row
+    correctly attributed to no actor, confirmed live).
+  - **Grant hardening applied proactively for all 6 functions from the
+    start** (continuing the Migration 5 lesson): `anon` confirmed to have
+    zero `EXECUTE` on any of the six, `authenticated` has exactly the
+    five meant for it, `rpc_expire_stale_bookings` has neither
+    `anon` nor `authenticated` — all verified live immediately after
+    applying, no gap found this time.
+  - **Regression-tested all 5 prior-migration invariants**: cross-farmer
+    booking read denial, `profiles.role` self-promotion still blocked at
+    the grant layer, `audit_events` cross-centre isolation, direct client
+    writes to `bookings` still impossible outside the RPC path, `anon`
+    still denied every helper/RPC `EXECUTE` checked. All intact.
+  - `tsc --noEmit`, `next lint`, `next build` all re-run clean; all 19
+    routes still statically prerender. No application file touched.
 - **Phase 3B — Migration 5 (`audit_events`):**
   - `supabase/migrations/20260904125857_audit_events.sql`. Scope:
     `docs/DATABASE.md` §18 row 10 only — `audit_events` and the database
@@ -1104,19 +1191,18 @@ before Migration 6, which the user has already scoped: `rpc_create_booking`
   and `@supabase/supabase-js` installed but **not yet wired into the
   application** (no client integration, no auth flow — Migration 1 was
   schema-only, per instruction)
-- Database: **Migrations 1-5 applied** — 14 tables total (adds
-  `audit_events` to Migration 4's 13), 7 enums (unchanged — `audit_events`
-  introduces no new enum), 22 functions (adds `current_actor_profile_id`,
-  `write_audit_event`, and 6 per-table audit trigger functions), RLS
-  enabled on all 14 tables (32 policies — 31 through Migration 4, 1
-  centre-scoped read policy on `audit_events`; still zero write policies
-  on `bookings`/`centre_status`/`procurement_records`/`payment_records`/
-  `centre_live_state`/`audit_events` for any client role — every mutation
-  is RPC-only or trigger-only, no RPC yet built). Views, the RPC layer,
-  realtime, the expiry sweep, and seed data are not built — later
-  migrations. `OQ-17` (`now_serving_token` ordering under concurrent
-  multi-operator `IN_PROGRESS`) remains open, deferred by explicit
-  instruction; not touched by this migration
+- Database: **Migrations 1-6 applied** — 14 tables (unchanged this
+  migration — Migration 6 adds functions only, no new table), 7 enums,
+  28 functions (adds the 6 RPCs), RLS unchanged at 32 policies.
+  **`bookings` and `centre_status` now have a real, working, audited
+  client write path** via `rpc_create_booking`/`rpc_check_in`/
+  `rpc_call_next_farmer`/`rpc_set_centre_status` — the first tables in
+  this schema clients can actually mutate. Still no direct table write
+  for any client role anywhere (RPC-only, as designed). Quality/
+  weighment/procurement/payment RPCs, views, realtime, and seed data are
+  not built — later migrations. `OQ-17` (`now_serving_token` ordering
+  under concurrent multi-operator `IN_PROGRESS`) remains open; not
+  populated, returned, or depended on anywhere in Migration 6
 - UI: `/operator` (Phase 2B), all 5 `/farmer/*` routes (Phase 2C), and all
   4 `/admin/*` routes (Phase 2D) are real, UI-only screens backed by local
   demo state (`lib/demo/operatorDashboard.ts`, `lib/demo/farmerDashboard.ts`,
