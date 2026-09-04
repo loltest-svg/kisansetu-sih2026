@@ -2,16 +2,90 @@
 
 ## CURRENT PHASE
 
-Phase 3B — Migration 4 complete (`centre_live_state`). OQ-16/OQ-18/OQ-19
-were locked by explicit instruction before this migration; OQ-17
-(`now_serving_token`'s exact ordering rule under concurrent multi-operator
-`IN_PROGRESS`) remains genuinely unresolved and is carried forward — the
-column exists but is deliberately always `NULL`, not guessed at. Stopped
-after Migration 4 per instruction; awaiting explicit approval before
-Migration 5/the RPC layer.
+Phase 3B — Migration 5 complete (`audit_events`). Built ahead of the RPC
+layer (§18 row 12 formally depends on row 10) per explicit user decision
+when the dependency gap was raised. `OQ-17` remains open, deferred by
+explicit instruction — not populated anywhere in this migration either.
+Stopped after Migration 5 per instruction; awaiting explicit approval
+before Migration 6, which the user has already scoped: `rpc_create_booking`
++ `rpc_expire_stale_bookings` + `rpc_get_my_queue_position` +
+`rpc_check_in` + `rpc_call_next_farmer` + `rpc_set_centre_status`
+(quality/weighment/procurement/payment RPCs deferred further).
 
 ## COMPLETED
 
+- **Phase 3B — Migration 5 (`audit_events`):**
+  - `supabase/migrations/20260904125857_audit_events.sql`. Scope:
+    `docs/DATABASE.md` §18 row 10 only — `audit_events` and the database
+    triggers on the six tables it names (`centre_status`, `bookings`,
+    `procurement_records`, `payment_records`, `centre_assignments`,
+    `profiles` role/account_status).
+  - **Why row 10 before row 12 (the RPC layer the user originally asked
+    for)**: row 12 formally depends on row 10 in §18's own table, and
+    §16 states database-trigger audit logging is "a Phase 3B
+    implementation requirement, not an optional nicety." Raised as a
+    blocking dependency gap before writing any SQL; user chose "build
+    audit_events first, then RPCs" from two other options (proceed
+    unaudited, or combine both into one migration).
+  - **`action` vocabulary completed, not redefined**: §16 lists example
+    action names (`CENTRE_STATUS_CHANGED`, `DELAY_REPORTED`,
+    `CENTRE_PAUSED`, `CENTRE_RESUMED`, `BOOKING_CHECKED_IN`,
+    `QUEUE_CALLED_NEXT`, `PROCUREMENT_COMPLETED`, `PAYMENT_STATUS_CHANGED`,
+    `CENTRE_ADMIN_ASSIGNED`, `OPERATOR_ASSIGNED`, `ASSIGNMENT_REVOKED`,
+    `ACCOUNT_ROLE_CHANGED`, `ACCOUNT_SUSPENDED`) but `action` is typed
+    `text`, not a Postgres enum, and several tables' full lifecycles
+    aren't covered by the given names (e.g. no `BOOKING_CREATED`/
+    `BOOKING_CANCELLED`/`BOOKING_COMPLETED`). Filled in following the same
+    naming convention (`BOOKING_<PAST_TENSE_EVENT>`, `ACCOUNT_STATUS_CHANGED`
+    for the un-suspend case with no listed name) rather than leaving those
+    transitions unaudited — a vocabulary completion, not an invented
+    architecture decision, since the column was never a closed enum.
+  - **Actor attribution (§16) implemented exactly**: `current_actor_profile_id()`
+    prefers a transaction-local `app.actor_profile_id` setting over
+    `auth.uid()`, for the future privileged RPC paths that will set it.
+    Verified live: with `app.actor_profile_id` set to a test Centre
+    Admin, three sequential `centre_status` transitions
+    (insert-as-OPEN → PAUSED → OPEN) produced exactly
+    `CENTRE_STATUS_CHANGED` / `CENTRE_PAUSED` / `CENTRE_RESUMED`, each
+    correctly attributed with `actor_role_snapshot = CENTRE_ADMIN`.
+  - **S-10 (PII in audit metadata) honored by construction**: every
+    trigger's `metadata` is hand-built from an explicit field list; none
+    references `farmer_phone_snapshot` or any other phone/credential
+    field. Verified live: `metadata->>'farmer_phone_snapshot'` returned
+    `NULL` on every one of 7 booking/payment audit rows produced by a
+    full booking lifecycle test (`BOOKING_CREATED` through
+    `BOOKING_COMPLETED`, plus two `PAYMENT_STATUS_CHANGED` transitions).
+  - **Every audit-writing path proactively hardened this time** (applying
+    the Migration 4 lesson before, not after, discovering a gap):
+    `write_audit_event()` and `current_actor_profile_id()` (plain
+    functions, not trigger-typed, so directly callable if left grantable)
+    had `EXECUTE` revoked from `anon`/`authenticated`/`public` in the same
+    migration that created them; verified live immediately —
+    `has_function_privilege` returns `false` for all three roles on both.
+    All six trigger functions confirmed to reject direct invocation
+    structurally (`trigger functions can only be called as triggers`),
+    independent of any grant. `audit_events` itself has `INSERT`/
+    `UPDATE`/`DELETE`/`TRUNCATE` explicitly revoked from `anon`/
+    `authenticated` at the grant layer (§16: "no UPDATE/DELETE grants to
+    any client role for any reason"), on top of RLS's default-deny.
+  - **Adversarial tests run live**, fixtures created and fully deleted
+    afterward (verified empty): Farmer and Operator (even at their own
+    centre) denied all `audit_events` access; Centre Admin sees only
+    their own centre's rows, denied another centre's; Master Admin sees
+    all; a forged direct `INSERT` attempt into `audit_events` denied for
+    **every** role including Master Admin (`permission denied for table`);
+    a direct call to `write_audit_event()` attempting to insert an
+    arbitrary forged row denied at the grant layer; a `DELETE` attempt
+    (append-only enforcement) denied for every role.
+  - **Regression-tested all 5 prior-migration invariants** after
+    applying: cross-farmer booking read denial, `profiles.role`
+    self-promotion still blocked at the grant layer, `centre_live_state`
+    still read-all/zero-write, `anon` still has no `EXECUTE` on the
+    original 3 scope helpers or `recompute_centre_live_state`, and
+    `bookings`/`centre_status`/`procurement_records`/`payment_records`
+    still carry zero write policies. All intact.
+  - `tsc --noEmit`, `next lint`, `next build` all re-run clean; all 19
+    routes still statically prerender. No application file touched.
 - **Phase 3B — Migration 4 (`centre_live_state`):**
   - `supabase/migrations/20260904124205_centre_live_state.sql` +
     `supabase/migrations/20260904124459_harden_live_state_grants.sql`
@@ -1030,19 +1104,19 @@ Migration 5/the RPC layer.
   and `@supabase/supabase-js` installed but **not yet wired into the
   application** (no client integration, no auth flow — Migration 1 was
   schema-only, per instruction)
-- Database: **Migrations 1-4 applied** — 13 tables total (adds
-  `centre_live_state` to Migration 3's 12), 7 enums (adds
-  `centre_effective_status`), 14 functions (adds
-  `recompute_centre_live_state` + 3 trigger functions), RLS enabled on
-  all 13 tables (31 policies — 30 through Migration 3, 1 read-all policy
-  on `centre_live_state`; still zero write policies on `bookings`/
-  `centre_status`/`procurement_records`/`payment_records`/
-  `centre_live_state` — every mutation is RPC-only or trigger-only, no
-  RPC yet built). `audit_events`, views, the RPC layer, realtime, the
-  expiry sweep, and seed data are not built — later migrations. `OQ-17`
-  (`now_serving_token` ordering under concurrent multi-operator
-  `IN_PROGRESS`) remains open and blocks nothing built so far, but should
-  be answered before any UI/RPC surfaces that field
+- Database: **Migrations 1-5 applied** — 14 tables total (adds
+  `audit_events` to Migration 4's 13), 7 enums (unchanged — `audit_events`
+  introduces no new enum), 22 functions (adds `current_actor_profile_id`,
+  `write_audit_event`, and 6 per-table audit trigger functions), RLS
+  enabled on all 14 tables (32 policies — 31 through Migration 4, 1
+  centre-scoped read policy on `audit_events`; still zero write policies
+  on `bookings`/`centre_status`/`procurement_records`/`payment_records`/
+  `centre_live_state`/`audit_events` for any client role — every mutation
+  is RPC-only or trigger-only, no RPC yet built). Views, the RPC layer,
+  realtime, the expiry sweep, and seed data are not built — later
+  migrations. `OQ-17` (`now_serving_token` ordering under concurrent
+  multi-operator `IN_PROGRESS`) remains open, deferred by explicit
+  instruction; not touched by this migration
 - UI: `/operator` (Phase 2B), all 5 `/farmer/*` routes (Phase 2C), and all
   4 `/admin/*` routes (Phase 2D) are real, UI-only screens backed by local
   demo state (`lib/demo/operatorDashboard.ts`, `lib/demo/farmerDashboard.ts`,
