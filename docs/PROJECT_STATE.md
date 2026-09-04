@@ -2,29 +2,99 @@
 
 ## CURRENT PHASE
 
-Phase 3B — Migration 11 complete: the scheduled expiry sweep (§18 row
-14), via `pg_cron`, hourly (`0 * * * *`), running exactly
-`select public.rpc_expire_stale_bookings();` — the exact approved scope,
-nothing more. `rpc_expire_stale_bookings()` itself is byte-identical to
-before (verified via `pg_get_functiondef`); its grants unchanged
-(`service_role`-only). One genuine finding during verification: `pg_cron`
-installed into `pg_catalog`, not the requested `extensions` schema —
-the extension's own fixed, non-relocatable placement on this Supabase
-platform, not a defect. `pg_cron`'s execution engine confirmed genuinely
-live (a throwaway test job, created and removed within this same
-session, produced 5 real successful `cron.job_run_details` rows before
-cleanup). The actual expiry command was executed manually against real
-fixture data and produced the exact required outcome: stale `CONFIRMED`
-→ `EXPIRED`, stale `CHECKED_IN` untouched. `OQ-17` untouched; row 15
-(seed data) explicitly not pulled forward. Stopped after Migration 11
-per instruction; awaiting explicit approval before row 15 or any UI/
-application integration — that leaves `§18`'s entire non-UI database
-scope for Phase 3B **complete** (rows 1–14 all done; row 15 is the only
-remainder, and it was explicitly excluded from every migration through
-this one).
+Phase 3B — Migration 12 complete: seed/demo data (§18 row 15). **This
+completes docs/DATABASE.md §18 in full — all 15 rows now built and
+verified.** None of the five docs re-read for this migration (DATABASE.md,
+SECURITY.md, ARCHITECTURE.md, BUSINESS_LOGIC.md, PROJECT_STATE.md)
+specify concrete seed values — only §18 row 15's category list — so the
+exact commodity/centre/account set was resolved by explicit decision
+before any SQL was written, not invented. **Approved seed set, recorded
+here for future reference:**
+- **Commodities (4):** Wheat/WHT (the one example DATABASE.md §4.2
+  actually names) + Mustard/MUS, Gram/GRM, Barley/BAR (already named in
+  `lib/demo/farmerDashboard.ts`'s `demoCropOptions`; codes mechanically
+  derived from each name's first three letters, the same convention
+  Wheat/WHT already establishes).
+- **Centres (6):** the exact 6 already named in
+  `lib/demo/adminDashboard.ts`'s `demoCentres` — XYZ/ABC/PQR/LMN/DEF/GHI
+  Procurement Centre, codes `<INITIALS>-01` per DATABASE.md §4.1's own
+  illustrated format, district from each centre's existing `location`
+  field, state Rajasthan for all six, `opens_at`/`closes_at` 09:00–17:00
+  (not sourced from any document — a uniform default).
+- **Demo accounts (16):** 1 Master Admin, 6 Centre Admins (the exact
+  already-named individuals — Priya Sharma, Anil Verma, Sunita Rathore,
+  Devendra Singh, Manisha Joshi, Ramesh Choudhary), 6 Operators (1 per
+  centre, generically labeled — no operator names exist anywhere), 3
+  Farmers (generically labeled). All `.test`-TLD emails (RFC 2606),
+  sequential non-real phone numbers, **no password/login capability set
+  up** — that's explicitly deferred to a later, separate integration
+  phase.
+`OQ-17` untouched throughout. Stopped after Migration 12 per instruction;
+not proceeding to UI/application integration automatically.
 
 ## COMPLETED
 
+- **Phase 3B — Migration 12 (seed/demo data):**
+  - `supabase/migrations/20260904173624_seed_demo_data.sql`. Data rows
+    only — zero schema/RLS/RPC/trigger/view/realtime/`pg_cron` change,
+    verified live: table count (14), view count (2), function count
+    (33), policy count (33), realtime-published-table count (2), and
+    `cron.job` row count (1) all identical before and after.
+  - **Live counts matched hand-computed expectations exactly**: 4
+    commodities, 6 centres, 24 `centre_commodities` (6×4, every centre
+    accepts every commodity — the simplest non-exclusionary default,
+    since no document specifies a per-centre subset), 16 `auth.users`/
+    `profiles` (the `handle_new_user` trigger from Migration 1 correctly
+    populated every `profiles` row from `raw_user_meta_data` — role
+    still always starts at the `FARMER` default per that trigger's
+    design, never trusted from signup metadata even here), 12
+    `centre_assignments` (6 Centre Admins + 6 Operators, one pair per
+    centre), 6 `centre_status`, 6 `centre_status_events` (auto-generated
+    by the Migration 2 trigger, one per initial status insert), 18
+    `centre_operating_days` (6 centres × 3 days), 144 `slots`
+    (6 × 3 days × 8 hourly slots).
+  - **Every Centre Admin/Operator verified live to be assigned to
+    exactly their own named centre** — a full join of
+    `centre_assignments` × `profiles` × `procurement_centres` produced
+    12 rows, each pairing the correct named individual with the correct
+    centre, matching `lib/demo/adminDashboard.ts` exactly.
+  - **The whole system's date-scoping logic (OQ-19) proven end-to-end
+    with real seed data for the first time**: `v_centre_availability`
+    and `centre_live_state` both correctly show PQR `DELAYED` (with its
+    reason), LMN `PAUSED`, and GHI `CLOSED` **only for today** — every
+    later seeded date for those same three centres correctly reverts to
+    `OPEN`, exactly matching the design locked in Migration 4 and
+    exercised by `rpc_create_booking` since Migration 6, now visibly
+    correct against real data rather than disposable test fixtures.
+  - **RLS verified live against the real seed accounts**: a demo Farmer
+    sees zero other farmers'/staff profiles and zero bookings (none
+    seeded — bookings are transactional, explicitly out of this
+    migration's scope); a demo Operator sees only their own
+    `centre_assignments` row, not other centres'; `anon` denied on
+    `procurement_centres` (scoped `to authenticated` only, matching
+    Migration 1's original design — confirmed, not assumed).
+  - **No accidental login capability**: confirmed live that zero seeded
+    `auth.users` rows have `encrypted_password` set — these are
+    `profiles` identities only, not yet sign-in capable, exactly as
+    scoped ("do not begin UI/application integration").
+  - **Full pipeline exercised end-to-end against the seed data as part
+    of verification, then cleaned up**: a real booking was created via
+    `rpc_create_booking` against a seeded slot/commodity/farmer
+    (`WHT-1`, `CONFIRMED`) to prove the whole stack works together —
+    then deleted immediately afterward, since bookings are transactional
+    data, not part of row 15's scope. One accidental over-broad `DELETE`
+    during that cleanup removed a legitimate seed-time `audit_events`
+    row (XYZ's initial `CENTRE_STATUS_CHANGED`) along with the test
+    booking's own audit trail — caught by comparing live counts against
+    expectations (6 expected `centre_status` audit rows, 5 found),
+    corrected by reconstructing the exact missing row.
+  - **Regression-tested 3 prior-migration invariants** against the real
+    seed accounts specifically (not disposable fixtures): `profiles.role`
+    self-promotion still blocked, cross-centre RPC authorization still
+    denied (a demo Operator at ABC denied from setting XYZ's centre
+    status), `rpc_create_booking` still fully functional end-to-end.
+  - `tsc --noEmit`, `next lint`, `next build` all re-run clean; all 19
+    routes still statically prerender. No application file touched.
 - **Phase 3B — Migration 11 (scheduled expiry sweep, `pg_cron`):**
   - `supabase/migrations/20260904171719_schedule_expiry_sweep.sql`. Two
     statements only: `CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA
@@ -1542,22 +1612,21 @@ this one).
   and `@supabase/supabase-js` installed but **not yet wired into the
   application** (no client integration, no auth flow — Migration 1 was
   schema-only, per instruction)
-- Database: **Migrations 1-11 applied** — 14 tables + 2 views, 33
-  functions, RLS at 33 policies (all unchanged since Migration 10 — row
-  14 needed no new table/RPC/policy). **§18 rows 1–14 are now all
-  complete** — the entire non-UI database scope planned for Phase 3B,
-  row 15 (seed data) excepted. `pg_cron` is installed (landed in
-  `pg_catalog`, its own fixed platform placement, not `extensions` as
-  requested — noted, not a defect) and one job, `expire-stale-bookings`,
-  runs `select public.rpc_expire_stale_bookings();` hourly
-  (`0 * * * *`) as `postgres`, confirmed live and confirmed actually
-  executing (a disposable test job proved the engine itself fires on
-  schedule, then was removed). `rpc_expire_stale_bookings()` itself and
-  its `service_role`-only grant are untouched. `OQ-17` remains open,
+- Database: **Migrations 1-12 applied** — schema unchanged since
+  Migration 11 (14 tables, 2 views, 33 functions, 33 policies, 2
+  realtime-published tables, 1 `pg_cron` job — Migration 12 added data
+  rows only). **`docs/DATABASE.md` §18 is now complete in full — all 15
+  rows built and verified.** Live data: 4 commodities (Wheat/Mustard/
+  Gram/Barley), 6 procurement centres (Rajasthan, matching
+  `lib/demo/adminDashboard.ts`'s named demo centres), 16 demo accounts
+  (1 Master Admin, 6 named Centre Admins, 6 Operators, 3 Farmers — no
+  login capability set up, `.test`-TLD emails), 12 `centre_assignments`,
+  6 `centre_status` rows, 18 `centre_operating_days`, 144 `slots`. Zero
+  bookings (transactional, not seed data). `OQ-17` remains open,
   untouched throughout. `v_centre_daily_summary.uptime` remains
   unbuilt — no formula/baseline defined, deferred by explicit decision.
-  Row 15 (seed data) is now the **only** remaining §18 row, deliberately
-  excluded from every migration through this one
+  The database layer of Phase 3B is now complete; UI/application
+  integration is the next phase, not yet started
 - UI: `/operator` (Phase 2B), all 5 `/farmer/*` routes (Phase 2C), and all
   4 `/admin/*` routes (Phase 2D) are real, UI-only screens backed by local
   demo state (`lib/demo/operatorDashboard.ts`, `lib/demo/farmerDashboard.ts`,
