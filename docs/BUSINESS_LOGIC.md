@@ -306,7 +306,7 @@ unrelated facts to share a single cursor:
 
 | Machine | Owner | Values |
 |---|---|---|
-| **Appointment** (`bookings.status`) | Farmer books; operator advances | `BOOKED → CHECKED_IN → CALLED → IN_PROGRESS → COMPLETED`, plus `CANCELLED` / `NO_SHOW` |
+| **Appointment** (`bookings.status`) | Farmer books; operator advances | `CONFIRMED → CHECKED_IN → CALLED → IN_PROGRESS → COMPLETED`, plus `CANCELLED` / `NO_SHOW` / `EXPIRED` |
 | **In-centre processing** (`procurement_records`) | Centre staff | Evidence-based: quality → weighment → procurement, each recorded with who and when |
 | **Payment** (`payment_records.status`) | Set from outside the centre workflow | `PENDING → PROCESSING → PAID`, or `FAILED` |
 

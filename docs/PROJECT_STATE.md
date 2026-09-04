@@ -2,11 +2,92 @@
 
 ## CURRENT PHASE
 
-Phase 3B — Migration 1 complete (schema foundation). Stopped after
-Migration 1 per instruction; awaiting explicit approval before Migration 2.
+Phase 3B — Migration 2 complete (centre operations foundation + bookings
+transaction spine). Stopped after Migration 2 per instruction; awaiting
+explicit approval before Migration 3.
 
 ## COMPLETED
 
+- **Phase 3B — Migration 2 (centre_status + bookings):**
+  - `supabase/migrations/20260904101623_centre_status_and_bookings.sql`.
+    Scope: `docs/DATABASE.md` §18 row 5 (`centre_status`,
+    `centre_status_events`, trigger) and row 7 (`bookings` + constraints +
+    indexes) — the two remaining rows whose dependencies Migration 1 fully
+    satisfied and which don't depend on each other. Everything from row 8
+    onward (`centre_live_state`, `procurement_records`/`payment_records`,
+    `audit_events`, views, RPCs, realtime, the expiry sweep, seed data)
+    deliberately excluded.
+  - **Real contradiction found in `docs/SECURITY.md` §3 and resolved
+    conservatively, not silently**: the per-table matrix's Centre Admin
+    cell for both `centre_status` and `bookings` omits the "(via RPC)"
+    qualifier that the Operator cell carries, which read in isolation
+    could imply Centre Admin has a direct client write path. §RLS-2
+    states plainly, with no role carve-out, that centre status change and
+    every booking mutation are "never direct client table writes...
+    regardless of policy." Resolution: **zero INSERT/UPDATE/DELETE
+    policies on either table, for any role** — reads only until
+    `rpc_set_centre_status`/`rpc_create_booking`/`rpc_check_in`/
+    `rpc_call_next_farmer` etc. ship in a later migration. Strictly the
+    safer reading either way; documented in the migration file itself.
+  - **Active-booking invariant and `request_id` idempotency shipped as
+    schema objects in this migration**, per instruction ("from the
+    beginning," not deferred): the partial unique index on
+    `bookings(farmer_id)` over the four active statuses, and
+    `request_id uuid unique`. Both are inert right now — nobody can
+    insert a booking at all yet, since there is no INSERT policy — so
+    this is not the C-9 lockout risk the invariant+sweep coupling
+    guards against; that risk only exists once `rpc_create_booking`
+    exists, at which point `rpc_expire_stale_bookings` must ship in the
+    same migration as it (both are §18 row-12/14 objects, correctly
+    deferred together).
+  - `EXPIRED` added to `booking_status`; the sweep mechanism itself
+    (`rpc_expire_stale_bookings`) is not built — tracked, not silently
+    dropped.
+  - Status/timestamp coherence and the slot/service_date match are
+    enforced by two new triggers on `bookings`
+    (`enforce_booking_status_coherence`, `enforce_booking_service_date`),
+    per `docs/DATABASE.md` §7.2. `centre_status_events` is written
+    exclusively by a trigger on `centre_status`
+    (`record_centre_status_event`), append-only, per §5.2.
+  - **Anon-execute hardening finding from the Migration 1 reconciliation
+    remediated in this migration**: `revoke execute ... from anon` added
+    for `auth_role()`/`auth_is_master_admin()`/`auth_centre_ids()`, as a
+    new additive statement — Migration 1's file was not touched, edited,
+    or rerun. Verified live: `has_function_privilege('anon', ...)` now
+    `false` for all three.
+  - **Minor doc-drift fixed in passing**: `docs/BUSINESS_LOGIC.md`'s
+    three-state-machine table still read `BOOKED → CHECKED_IN → ...` and
+    omitted `EXPIRED`, predating the Phase 3A.1 `CONFIRMED` rename and the
+    `EXPIRED` addition that the same document's own "Queue — state
+    transitions" section (a few hundred lines earlier, and authoritative)
+    already reflects. Corrected to match. Also noted, not touched:
+    `docs/ARCHITECTURE.md` line ~64 still lists the pre-3A.1 four-table
+    realtime publication (`centre_status`, `centre_queue_state`,
+    `bookings`, `procurement_records`) instead of the locked two-table
+    surface (`centre_live_state`, `bookings`) — realtime is out of scope
+    until row 13, so left for whichever migration actually touches
+    realtime to correct.
+  - **Adversarial security tests run live against the linked database**,
+    with disposable fixtures (2 test centres, 6 test profiles across all
+    four roles, 1 booking) created and then fully deleted afterward —
+    verified empty before finishing. All of: cross-farmer booking read
+    denial, cross-centre operator read denial, Centre Admin's
+    centre-wide (vs Operator's own-row-only) `centre_assignments` read
+    scope, direct booking INSERT (RLS violation), direct booking status
+    UPDATE / direct `centre_status` UPDATE (both true no-ops — zero rows
+    affected, confirmed via `RETURNING` and a fresh read, not just "no
+    error"), `profiles.role` self-promotion (blocked at the grant layer,
+    same as Migration 1), the active-booking partial unique index, the
+    `request_id` unique constraint, a farmer regaining an active slot
+    after their booking goes terminal (no permanent lockout), both new
+    trigger functions rejecting direct invocation
+    (`record_centre_status_event`, `enforce_booking_service_date`,
+    `enforce_booking_status_coherence`), the status/timestamp coherence
+    check, and the slot/service_date match check — all passed as
+    designed. The `EXPIRED` sweep itself is **NOT VERIFIED** — no RPC
+    exists yet to test; reported as such, not asserted PASS.
+  - `tsc --noEmit`, `next lint`, `next build` all re-run clean; all 19
+    routes still statically prerender. No application file touched.
 - **Phase 3B — Migration 1 (schema foundation):**
   - Supabase project `dzqddefcvnelamrfbfvo` confirmed already linked; `public`
     schema and migration history confirmed empty before writing any SQL
@@ -776,13 +857,16 @@ Migration 1 per instruction; awaiting explicit approval before Migration 2.
   and `@supabase/supabase-js` installed but **not yet wired into the
   application** (no client integration, no auth flow — Migration 1 was
   schema-only, per instruction)
-- Database: **Migration 1 applied** —
-  `supabase/migrations/20260904092326_schema_foundation.sql`. 7 tables
+- Database: **Migrations 1 and 2 applied** — 10 tables total
   (`profiles`, `commodities`, `procurement_centres`, `centre_commodities`,
-  `centre_assignments`, `centre_operating_days`, `slots`), 2 enums, 6
-  functions, RLS enabled with 25 policies. Bookings, queue, realtime,
-  payment, notifications, audit, RPCs and seed data are not built —
-  next migrations
+  `centre_assignments`, `centre_operating_days`, `slots`, `centre_status`,
+  `centre_status_events`, `bookings`), 4 enums, 9 functions, RLS enabled
+  on all 10 tables (28 policies — 25 from Migration 1, 3 read-only from
+  Migration 2; `bookings`/`centre_status`/`centre_status_events` have no
+  write policy for any role — RPC-only, not yet built). `centre_live_state`,
+  `procurement_records`/`payment_records`, `audit_events`, views, RPCs,
+  realtime, the expiry sweep, and seed data are not built — next
+  migrations
 - UI: `/operator` (Phase 2B), all 5 `/farmer/*` routes (Phase 2C), and all
   4 `/admin/*` routes (Phase 2D) are real, UI-only screens backed by local
   demo state (`lib/demo/operatorDashboard.ts`, `lib/demo/farmerDashboard.ts`,
