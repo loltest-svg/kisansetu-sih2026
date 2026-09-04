@@ -2,20 +2,92 @@
 
 ## CURRENT PHASE
 
-Phase 3B — Migration 10 complete: Realtime publication membership for
-`centre_live_state` and `bookings` (§18 row 13) — the exact two-table
-set locked by the Phase 3A.1 amendment, nothing more. `anon` denial
-verified via genuine live WebSocket connections (not just SQL
-simulation); authenticated cross-farmer/cross-centre isolation verified
-structurally via the identical RLS policies Realtime enforces per
-subscriber, honestly labeled as such since no service-role key exists
-in this environment to mint real authenticated test sessions. `OQ-17`
-untouched. Row 14 (expiry-sweep schedule) and row 15 (seed data) were
-explicitly NOT pulled forward. Stopped after Migration 10 per
-instruction; awaiting explicit approval before either.
+Phase 3B — Migration 11 complete: the scheduled expiry sweep (§18 row
+14), via `pg_cron`, hourly (`0 * * * *`), running exactly
+`select public.rpc_expire_stale_bookings();` — the exact approved scope,
+nothing more. `rpc_expire_stale_bookings()` itself is byte-identical to
+before (verified via `pg_get_functiondef`); its grants unchanged
+(`service_role`-only). One genuine finding during verification: `pg_cron`
+installed into `pg_catalog`, not the requested `extensions` schema —
+the extension's own fixed, non-relocatable placement on this Supabase
+platform, not a defect. `pg_cron`'s execution engine confirmed genuinely
+live (a throwaway test job, created and removed within this same
+session, produced 5 real successful `cron.job_run_details` rows before
+cleanup). The actual expiry command was executed manually against real
+fixture data and produced the exact required outcome: stale `CONFIRMED`
+→ `EXPIRED`, stale `CHECKED_IN` untouched. `OQ-17` untouched; row 15
+(seed data) explicitly not pulled forward. Stopped after Migration 11
+per instruction; awaiting explicit approval before row 15 or any UI/
+application integration — that leaves `§18`'s entire non-UI database
+scope for Phase 3B **complete** (rows 1–14 all done; row 15 is the only
+remainder, and it was explicitly excluded from every migration through
+this one).
 
 ## COMPLETED
 
+- **Phase 3B — Migration 11 (scheduled expiry sweep, `pg_cron`):**
+  - `supabase/migrations/20260904171719_schedule_expiry_sweep.sql`. Two
+    statements only: `CREATE EXTENSION IF NOT EXISTS pg_cron WITH SCHEMA
+    extensions` and one `cron.schedule(...)` call. No RPC/table/RLS/
+    grant change of any kind — verified live.
+  - **Live verification confirms `rpc_expire_stale_bookings()` is
+    completely untouched**: `pg_get_functiondef` output byte-identical
+    to its pre-Migration-11 definition; `EXECUTE` still `service_role`-only,
+    still denied to `authenticated`/`anon`.
+  - **`pg_cron` schema placement — a genuine finding, not a defect**:
+    despite `WITH SCHEMA extensions` (matching this project's existing
+    convention — `pg_stat_statements`/`pgcrypto`/`uuid-ossp` all live
+    there, confirmed live before writing this migration), `pg_cron`
+    installed into `pg_catalog`. This is the extension's own fixed,
+    non-relocatable placement on Supabase's managed platform (a known
+    characteristic of this specific extension, not something the `WITH
+    SCHEMA` clause can override) — `cron.job`/`cron.schedule()`/
+    `cron.job_run_details` all correctly live in the `cron` schema
+    regardless, exactly as documented in the migration's own comments
+    before this was confirmed live.
+  - **Exactly one job exists, confirmed live**: `cron.job` shows
+    `jobid=1`, `jobname='expire-stale-bookings'`, `schedule='0 * * * *'`,
+    `command='select public.rpc_expire_stale_bookings();'`, `active=true`,
+    running as `postgres` (the role that scheduled it — which is why no
+    additional grant on the `service_role`-only RPC was needed; the
+    scheduling role already bypasses that grant the same way it bypasses
+    RLS, verified functionally by the sweep actually running below).
+  - **`pg_cron`'s execution engine confirmed genuinely live, not just
+    configured**: a throwaway job (`every 5 seconds`, `select 1`) was
+    scheduled, allowed to fire, and its `cron.job_run_details` rows
+    inspected — 5 real `succeeded` runs recorded within the session —
+    before being unscheduled and removed. This is direct evidence
+    `pg_cron`'s background worker is actually executing scheduled SQL on
+    this instance, not merely that a row exists in `cron.job`. The
+    intended job was left as the sole entry afterward (`cron.job` has
+    exactly one row, confirmed).
+  - **Actual expiry behavior verified against real fixture data**, not
+    inferred: a stale `CONFIRMED` booking (`service_date` in the past)
+    and a stale `CHECKED_IN` booking (also past-dated) were created, then
+    the exact scheduled command (`select public.rpc_expire_stale_bookings();`)
+    was executed manually (the safest available live verification
+    method, since waiting for a real hourly tick wasn't practical within
+    this session) — the `CONFIRMED` booking became `EXPIRED`, the
+    `CHECKED_IN` booking was left completely untouched. No grace period
+    introduced anywhere — `OQ-14` remains exactly as open as before.
+  - **C-9 (no permanent lockout) reconfirmed through the RPC path**: the
+    farmer whose stale booking had just expired was able to create a new
+    active booking immediately afterward via `rpc_create_booking`
+    (`status: CONFIRMED` returned) — the coupling between the invariant
+    and the sweep, now that both exist, was exercised end-to-end for the
+    first time.
+  - **Regression-tested 5 prior-migration invariants**: C-9 rebooking
+    (above), `profiles.role` self-promotion, cross-farmer booking
+    isolation, `anon` `EXECUTE` denial across the helper/RPC surface
+    (including reconfirming `rpc_expire_stale_bookings()` itself stays
+    denied to `authenticated`), Realtime publication unchanged (still
+    exactly `{bookings, centre_live_state}`). All intact.
+  - Confirmed row 15 not pulled forward (no seed data inserted — the
+    one non-zero count seen mid-verification was this migration's own
+    disposable test fixture, deleted before finishing) and `OQ-17`
+    untouched throughout.
+  - `tsc --noEmit`, `next lint`, `next build` all re-run clean; all 19
+    routes still statically prerender. No application file touched.
 - **Phase 3B — Migration 10 (Realtime publication):**
   - `supabase/migrations/20260904164501_realtime_publication.sql`. Two
     statements only: `ALTER PUBLICATION supabase_realtime ADD TABLE`
@@ -1470,19 +1542,22 @@ instruction; awaiting explicit approval before either.
   and `@supabase/supabase-js` installed but **not yet wired into the
   application** (no client integration, no auth flow — Migration 1 was
   schema-only, per instruction)
-- Database: **Migrations 1-10 applied** — 14 tables + 2 views (unchanged
-  since Migration 9), 33 functions (verified live directly by name —
-  earlier reports' "35" was a bookkeeping slip, not a real discrepancy;
-  every function accounted for), RLS unchanged at 33 policies. **§18 row
-  13 (Realtime) is now live**: `supabase_realtime` publishes exactly
-  `centre_live_state` and `bookings` — verified via
-  `pg_publication_tables`, `anon` denial verified via genuine live
-  WebSocket tests. `OQ-17` remains open; not populated, returned, or
-  depended on anywhere through Migration 10. `v_centre_daily_summary.uptime`
-  remains unbuilt — no formula/baseline defined yet, deferred by explicit
-  decision, not guessed. Row 14 (expiry-sweep schedule, mechanism still
-  undecided between `pg_cron` and an application-level cron) and row 15
-  (seed data) remain unbuilt, neither pulled forward into Migration 10
+- Database: **Migrations 1-11 applied** — 14 tables + 2 views, 33
+  functions, RLS at 33 policies (all unchanged since Migration 10 — row
+  14 needed no new table/RPC/policy). **§18 rows 1–14 are now all
+  complete** — the entire non-UI database scope planned for Phase 3B,
+  row 15 (seed data) excepted. `pg_cron` is installed (landed in
+  `pg_catalog`, its own fixed platform placement, not `extensions` as
+  requested — noted, not a defect) and one job, `expire-stale-bookings`,
+  runs `select public.rpc_expire_stale_bookings();` hourly
+  (`0 * * * *`) as `postgres`, confirmed live and confirmed actually
+  executing (a disposable test job proved the engine itself fires on
+  schedule, then was removed). `rpc_expire_stale_bookings()` itself and
+  its `service_role`-only grant are untouched. `OQ-17` remains open,
+  untouched throughout. `v_centre_daily_summary.uptime` remains
+  unbuilt — no formula/baseline defined, deferred by explicit decision.
+  Row 15 (seed data) is now the **only** remaining §18 row, deliberately
+  excluded from every migration through this one
 - UI: `/operator` (Phase 2B), all 5 `/farmer/*` routes (Phase 2C), and all
   4 `/admin/*` routes (Phase 2D) are real, UI-only screens backed by local
   demo state (`lib/demo/operatorDashboard.ts`, `lib/demo/farmerDashboard.ts`,
