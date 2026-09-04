@@ -770,18 +770,23 @@ changed — a closed client sends nothing.
 ## 12. Realtime design
 
 Published tables (explicit publication membership — nothing is realtime by
-accident):
+accident). **Amended in 3A.1**: reduced from the four tables originally
+listed here to two — `centre_status` and `procurement_records` were
+dropped because their changes already reach subscribers through the
+`centre_live_state` aggregate or a refetch, and every published table is
+another surface where a policy mistake becomes a live leak
+(`docs/SECURITY.md` §7 carries the authoritative statement of this
+decision; applied live in Phase 3B Migration 10):
 
 | Table | Subscribers | Why |
 |---|---|---|
-| `centre_status` | Farmer, Operator, Admin | Status changes must reach farmers immediately (`docs/DEMO.md` steps 11–12) |
 | `centre_live_state` | Farmer, Operator, Admin | The queue aggregate — see below |
 | `bookings` | Operator (own centre), Farmer (own rows) | Operator queue list; farmer's own booking state |
-| `procurement_records` | Farmer (own), Operator (own centre) | Live workflow stepper progress |
 
 Explicitly **not** published: `audit_events` (append-only firehose; the
 Admin activity feed refetches), `profiles`, `payment_records` (low
-frequency; refetch on booking change is sufficient).
+frequency; refetch on booking change is sufficient), `centre_status` and
+`procurement_records` (per the 3A.1 amendment above).
 
 ### 12.1 `centre_live_state` — the safe public projection
 

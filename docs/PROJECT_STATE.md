@@ -2,22 +2,74 @@
 
 ## CURRENT PHASE
 
-Phase 3B — Migration 9 complete: `v_centre_availability` and
-`v_centre_daily_summary` (§18 row 11). `v_centre_daily_summary` ships
-with `avg_wait`/`peak_concurrent_waiting` only — `uptime` was flagged as
-genuinely undefined in the docs (no formula, no agreed baseline window)
-and, per explicit decision, deferred to a later migration rather than
-guessed. Two real defects were found during this migration's own
-required verification steps and fixed with additive follow-up migrations
-before this phase could be called complete (see below) — neither
-required editing an already-applied migration file. `OQ-17` untouched.
-Stopped after Migration 9 per instruction; row 13 (realtime), row 14
-(the expiry sweep's actual schedule), and row 15 (seed data) all remain
-unbuilt, awaiting explicit approval and, for row 14, a mechanism decision
-(`pg_cron` vs. an application-level cron route) not yet made.
+Phase 3B — Migration 10 complete: Realtime publication membership for
+`centre_live_state` and `bookings` (§18 row 13) — the exact two-table
+set locked by the Phase 3A.1 amendment, nothing more. `anon` denial
+verified via genuine live WebSocket connections (not just SQL
+simulation); authenticated cross-farmer/cross-centre isolation verified
+structurally via the identical RLS policies Realtime enforces per
+subscriber, honestly labeled as such since no service-role key exists
+in this environment to mint real authenticated test sessions. `OQ-17`
+untouched. Row 14 (expiry-sweep schedule) and row 15 (seed data) were
+explicitly NOT pulled forward. Stopped after Migration 10 per
+instruction; awaiting explicit approval before either.
 
 ## COMPLETED
 
+- **Phase 3B — Migration 10 (Realtime publication):**
+  - `supabase/migrations/20260904164501_realtime_publication.sql`. Two
+    statements only: `ALTER PUBLICATION supabase_realtime ADD TABLE`
+    for `centre_live_state` and `bookings`. No RLS change, no grant
+    change, no `REPLICA IDENTITY` change (both already default/primary
+    key — verified live both before and after), no new table/function/
+    trigger/policy.
+  - **Live verification, not file/grep verification**: `pg_publication_tables`
+    for `supabase_realtime` contains exactly `{centre_live_state,
+    bookings}` — confirmed by direct query, not inferred from the
+    migration file. `centre_status`, `procurement_records`,
+    `payment_records`, `profiles`, `audit_events`, and both views
+    (`v_centre_availability`, `v_centre_daily_summary`) all confirmed
+    **not** present in the publication.
+  - **Genuine live WebSocket tests performed** (not simulated) for the
+    one part of this scope that's actually testable without a
+    service-role key: two real `@supabase/supabase-js` Realtime
+    subscriptions, connected with only the anon key (no login), each
+    left open while a real `UPDATE` was issued against the underlying
+    table from a separate privileged connection. Both received **zero**
+    events despite the underlying row genuinely changing — confirmed
+    `anon` cannot receive changes on `bookings` or on `centre_live_state`
+    through Realtime, live, not asserted.
+  - **Authenticated cross-isolation honestly labeled as structural, not
+    live**: this project has no `SUPABASE_SERVICE_ROLE_KEY` configured
+    (deliberately — `docs/SECURITY.md` §4, "never fill with a
+    placeholder"), so there is no way in this environment to mint a real
+    authenticated session for a genuine second-Farmer/second-Operator
+    WebSocket test. Instead, the exact RLS policies Supabase Realtime
+    documents itself as evaluating per subscriber for published tables
+    were exercised directly via SQL role simulation (the same method
+    already used and cross-checked across 9 prior migrations):
+    Farmer B cannot `SELECT` Farmer A's booking (0 rows); Farmer A can
+    (1 row); an Operator at a different centre cannot `SELECT` a booking
+    at Centre A (0 rows); the correct centre's Operator can (1 row); an
+    unrelated authenticated user can read `centre_live_state` for any
+    centre (matches its `USING (true)` policy). This is the closest
+    available proxy for the live behavior, not a substitute claimed to
+    be equivalent — reported as `STRUCTURALLY VERIFIED`, not `PASS`, in
+    the migration's own final report.
+  - **Doc-drift found and corrected**: `docs/DATABASE.md` §12's
+    "Published tables" list still showed the original Phase 3A four-table
+    set (`centre_status`, `centre_live_state`, `bookings`,
+    `procurement_records`), predating the 3A.1 amendment that
+    `docs/SECURITY.md` §7 and this file's own Phase 3A.1 log already
+    recorded. Corrected to the authoritative two-table list, with a note
+    pointing at §7 and this migration.
+  - **Regression-tested all 5 spot-checked prior-migration invariants**:
+    cross-farmer booking isolation, `profiles.role` self-promotion,
+    RPC authorization (unassigned operator denied on `rpc_check_in`),
+    `anon` `EXECUTE` denial across the helper/RPC surface, zero direct
+    write policies on all five RPC-only tables. All intact.
+  - `tsc --noEmit`, `next lint`, `next build` all re-run clean; all 19
+    routes still statically prerender. No application file touched.
 - **Phase 3B — Migration 9 (`v_centre_availability`, `v_centre_daily_summary`):**
   - `supabase/migrations/20260904160614_availability_views.sql`, plus
     two same-session follow-ups:
@@ -1418,23 +1470,19 @@ unbuilt, awaiting explicit approval and, for row 14, a mechanism decision
   and `@supabase/supabase-js` installed but **not yet wired into the
   application** (no client integration, no auth flow — Migration 1 was
   schema-only, per instruction)
-- Database: **Migrations 1-9 applied** — 14 tables + **2 views**
-  (`v_centre_availability`, `v_centre_daily_summary`; Migration 9 added
-  no new table), 7 enums, 35 functions (unchanged — Migration 9 added no
-  function, only views), RLS unchanged at 33 policies (views aren't
-  RLS-eligible objects; their own `SELECT`-only grant to `authenticated`
-  is the equivalent boundary, verified live). **All four core mutable
-  tables — `bookings`, `centre_status`, `procurement_records`,
-  `payment_records` — have a real, working, audited, RPC-only client
-  write path**, and the two read-side views now back the five screens/
-  the allocation engine's documented data needs (§13/§15). Still no
-  direct table/view write for any client role anywhere. `OQ-17`
-  (`now_serving_token` ordering under concurrent multi-operator
-  `IN_PROGRESS`) remains open; not populated, returned, or depended on
-  anywhere through Migration 9. `v_centre_daily_summary.uptime` remains
-  unbuilt — no formula/baseline defined yet, deferred by explicit
-  decision, not guessed. Rows 13 (realtime), 14 (expiry-sweep schedule),
-  15 (seed data) all remain unbuilt
+- Database: **Migrations 1-10 applied** — 14 tables + 2 views (unchanged
+  since Migration 9), 33 functions (verified live directly by name —
+  earlier reports' "35" was a bookkeeping slip, not a real discrepancy;
+  every function accounted for), RLS unchanged at 33 policies. **§18 row
+  13 (Realtime) is now live**: `supabase_realtime` publishes exactly
+  `centre_live_state` and `bookings` — verified via
+  `pg_publication_tables`, `anon` denial verified via genuine live
+  WebSocket tests. `OQ-17` remains open; not populated, returned, or
+  depended on anywhere through Migration 10. `v_centre_daily_summary.uptime`
+  remains unbuilt — no formula/baseline defined yet, deferred by explicit
+  decision, not guessed. Row 14 (expiry-sweep schedule, mechanism still
+  undecided between `pg_cron` and an application-level cron) and row 15
+  (seed data) remain unbuilt, neither pulled forward into Migration 10
 - UI: `/operator` (Phase 2B), all 5 `/farmer/*` routes (Phase 2C), and all
   4 `/admin/*` routes (Phase 2D) are real, UI-only screens backed by local
   demo state (`lib/demo/operatorDashboard.ts`, `lib/demo/farmerDashboard.ts`,
