@@ -2,18 +2,72 @@
 
 ## CURRENT PHASE
 
-Phase 3B — Migration 7 complete: the procurement processing RPC trio
-(`rpc_record_quality`, `rpc_record_weighment`, `rpc_complete_procurement`).
-All six previously-flagged planning questions were locked by explicit
-instruction before this migration (REJECTED-quality handling, enforced
-workflow order, atomic completion, payment untouched, tightened
-per-booking Operator authorization, extended audit coverage) — nothing
-guessed. `OQ-17` untouched. Stopped after Migration 7 per instruction;
-`rpc_set_payment_status` (Migration 8) remains unbuilt, deferred as
-planned.
+Phase 3B — Migration 8 complete: `rpc_set_payment_status`, the final
+function in `docs/DATABASE.md` §18 row 12's RPC layer. Every core
+table (`bookings`, `centre_status`, `procurement_records`,
+`payment_records`) now has a real, working, audited, RPC-only write
+path. `OQ-17` remains untouched. Stopped after Migration 8 per
+instruction; awaiting explicit approval before Migration 9 or any UI/
+application integration.
 
 ## COMPLETED
 
+- **Phase 3B — Migration 8 (`rpc_set_payment_status`):**
+  - `supabase/migrations/20260904141540_rpc_set_payment_status.sql`. One
+    RPC, exactly as approved. No new tables/enums/RLS policies —
+    verified live: `payment_records` still exactly 1 policy, unchanged.
+  - **Authorization deliberately narrower than the Migration 6/7
+    pattern, per explicit instruction and `docs/SECURITY.md` §3's
+    matrix**: Centre Admin at the booking's own centre, or Master Admin
+    (any centre) — **Operator has no write cell at all** for
+    `payment_records`, matching `OQ-3`'s standing assumption. Verified
+    live: Farmer denied, Operator denied, cross-centre Centre Admin
+    denied, same-centre Centre Admin authorized, Master Admin authorized
+    system-wide.
+  - **Existing transition guard reused, not duplicated**: the RPC lets
+    Migration 3's `enforce_payment_status_transition()` trigger's own
+    clean error propagate unchanged. Verified live: a Centre Admin's
+    `PAID → PENDING` attempt and `PAID → FAILED` attempt both rejected
+    with the trigger's exact original message; Master Admin's
+    `PAID → FAILED` correction (with a `failure_note`) succeeded.
+  - **Gap found during the required pre-implementation inspection, fixed
+    as part of this migration, not carried forward**: `payment_records_audit`
+    (Migration 5) was registered `AFTER UPDATE` only. Since no RPC or
+    trigger anywhere auto-creates a `payment_records` row (Migration 7
+    deliberately left that to this migration), the *first* call to
+    `rpc_set_payment_status` for any booking is an `INSERT` — which the
+    existing registration would have silently never audited. Extended
+    via `CREATE OR REPLACE TRIGGER` (PG14+, this project runs 17) to also
+    fire on `INSERT`, function body updated to handle the no-`OLD`-row
+    case (`from_status: null`). Verified live: a fresh booking's first
+    `rpc_set_payment_status` call produced a `PAYMENT_STATUS_CHANGED` row
+    with `from_status: null`; every later transition still produces
+    exactly one row each, correctly attributed to the real calling actor
+    (Centre Admin then Master Admin, confirmed via `actor_role_snapshot`).
+  - **No client-supplied actor/centre identity possible even in
+    principle**: the RPC's signature is `(booking_id, status,
+    failure_note)` — there is no actor-id or centre-id parameter to
+    forge; authorization is derived entirely from `auth.uid()`/
+    `auth_role()`/`auth_centre_ids()` and the authoritative `bookings`
+    row's own `centre_id`. Verified by signature inspection, not just a
+    runtime probe, since the attack surface a forged-ID test would probe
+    structurally does not exist.
+  - **Direct table mutation confirmed still impossible**: a direct client
+    `UPDATE` on `payment_records` is a true no-op for every role
+    including Master Admin (0 rows, `RETURNING` empty); a direct `INSERT`
+    is an outright RLS violation. `EXECUTE` on `rpc_set_payment_status`
+    confirmed denied to `anon`, granted to `authenticated` (internal role
+    check does the real gating, same pattern as every RPC since
+    Migration 6).
+  - **Regression-tested all 7 prior-migration invariants**: `procurement_records`'
+    policy/trigger set unchanged; cross-farmer booking read denial;
+    `profiles.role` self-promotion still blocked; `rpc_record_quality`'s
+    unassigned-operator denial unchanged; `rpc_create_booking` idempotency
+    + the active-booking invariant re-verified through a fresh booking;
+    `anon` denied `EXECUTE` on every helper/RPC checked, including all
+    Migration 8 functions. All intact.
+  - `tsc --noEmit`, `next lint`, `next build` all re-run clean; all 19
+    routes still statically prerender. No application file touched.
 - **Phase 3B — Migration 7 (procurement processing RPC trio):**
   - `supabase/migrations/20260904140009_rpc_procurement_processing.sql`.
     Three RPCs plus one internal shared authorization helper
@@ -1257,19 +1311,19 @@ planned.
   and `@supabase/supabase-js` installed but **not yet wired into the
   application** (no client integration, no auth flow — Migration 1 was
   schema-only, per instruction)
-- Database: **Migrations 1-7 applied** — 14 tables (unchanged since
-  Migration 6 — Migrations 6 and 7 both add functions only, no new
-  table), 7 enums, 33 functions (Migration 7 adds `can_process_booking`,
-  `rpc_record_quality`, `rpc_record_weighment`,
-  `rpc_complete_procurement`, and extends `audit_procurement_records`
-  in place via `CREATE OR REPLACE`), RLS unchanged at 33 policies.
-  **`bookings`/`centre_status`/`procurement_records` now all have a
-  real, working, audited client write path**; `payment_records` remains
-  the one core table with none yet (`rpc_set_payment_status`, Migration
-  8, not built). Still no direct table write for any client role
-  anywhere (RPC-only, as designed). `OQ-17` (`now_serving_token`
-  ordering under concurrent multi-operator `IN_PROGRESS`) remains open;
-  not populated, returned, or depended on anywhere through Migration 7
+- Database: **Migrations 1-8 applied** — 14 tables (unchanged since
+  Migration 6 — Migrations 6/7/8 all add functions only, no new table),
+  7 enums, 35 functions (Migration 8 adds `rpc_set_payment_status` and
+  extends `audit_payment_records` in place via `CREATE OR REPLACE`, plus
+  a `CREATE OR REPLACE TRIGGER` widening it from `AFTER UPDATE` to
+  `AFTER INSERT OR UPDATE`), RLS unchanged at 33 policies. **All four
+  core mutable tables — `bookings`, `centre_status`, `procurement_records`,
+  `payment_records` — now have a real, working, audited, RPC-only client
+  write path.** The full §18 row-12 RPC layer scoped for Phase 3B is
+  complete. Still no direct table write for any client role anywhere.
+  `OQ-17` (`now_serving_token` ordering under concurrent multi-operator
+  `IN_PROGRESS`) remains open; not populated, returned, or depended on
+  anywhere through Migration 8
 - UI: `/operator` (Phase 2B), all 5 `/farmer/*` routes (Phase 2C), and all
   4 `/admin/*` routes (Phase 2D) are real, UI-only screens backed by local
   demo state (`lib/demo/operatorDashboard.ts`, `lib/demo/farmerDashboard.ts`,
