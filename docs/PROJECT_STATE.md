@@ -2,11 +2,88 @@
 
 ## CURRENT PHASE
 
-Phase 3A.1 — Backend Design Amendments (**design only — no code, no
-schema, no Supabase**)
+Phase 3B — Migration 1 complete (schema foundation). Stopped after
+Migration 1 per instruction; awaiting explicit approval before Migration 2.
 
 ## COMPLETED
 
+- **Phase 3B — Migration 1 (schema foundation):**
+  - Supabase project `dzqddefcvnelamrfbfvo` confirmed already linked; `public`
+    schema and migration history confirmed empty before writing any SQL
+    (`supabase migration list`, `supabase db query` against
+    `information_schema.tables`) — no blind SQL, no `db reset` used.
+  - One migration,
+    `supabase/migrations/20260904092326_schema_foundation.sql`, implementing
+    exactly `docs/DATABASE.md` §18 steps 1/3/4/6: `user_role` and
+    `account_status` enums (the only two enums a Migration-1 table needs),
+    `profiles` + the `auth.users` provisioning trigger, the three
+    `SECURITY DEFINER` scope helpers (`auth_role`, `auth_is_master_admin`,
+    `auth_centre_ids`), `commodities`, `procurement_centres`,
+    `centre_commodities`, `centre_assignments`, `centre_operating_days`,
+    `slots` — columns, constraints, indexes and RLS policies exactly as
+    specified per table in `docs/DATABASE.md` §§3-4 and
+    `docs/SECURITY.md` §3. Deliberately excludes `centre_status`/
+    `centre_status_events` (§5 — a later migration, not listed in the
+    approved Migration-1 scope), bookings, `centre_live_state`,
+    procurement/payment records, `audit_events`, views, RPCs, realtime
+    publication and seed data.
+  - RLS enabled and policies attached in the same migration as every
+    table's creation, per §18's explicit deviation from the brief's later
+    RLS step — no table existed unprotected at any commit.
+  - **RLS-1 (`profiles.role` self-promotion) implemented as all three
+    documented layers**: column-level grants (`authenticated` can UPDATE
+    only `full_name`/`phone`/`village_text` — verified live: a direct
+    `UPDATE profiles SET role = 'MASTER_ADMIN'` as `authenticated` fails
+    with `permission denied for table profiles`, independent of any row
+    existing), `WITH CHECK` pinning row ownership, and a backstop
+    `BEFORE UPDATE` trigger rejecting any `role`/`account_status` change
+    unless `auth_is_master_admin()`.
+  - **Documented dependency, not a workaround**: because Postgres column
+    grants are per database role (`authenticated`) and cannot distinguish
+    "Master Admin" from "Farmer", the Layer-1 grant currently blocks
+    *everyone*, including a future Master Admin, from changing
+    `role`/`account_status` via a direct client UPDATE. Per
+    `docs/SECURITY.md` §5, account/role administration is a Master-Admin-
+    only **RPC** surface, not a direct table write — that RPC is
+    `docs/DATABASE.md` §18 step 12, out of Migration 1's scope. Until it
+    ships, role/status is unchangeable by any client — the safe state, not
+    an insecure stopgap. Recorded here so it isn't rediscovered as a
+    surprise.
+  - **`role` is never taken from `auth.users` signup metadata** in
+    `handle_new_user()` — always starts at the column default (`FARMER`),
+    even though the application auth flow that would pass metadata isn't
+    built yet. Closes a self-promotion-at-signup vector that
+    `docs/SECURITY.md` §8 doesn't separately enumerate but which the same
+    RLS-1 reasoning applies to.
+  - **One interpretation judgment call, flagged rather than silent**:
+    `docs/SECURITY.md` §3's matrix cell for `profiles` lists explicit W
+    only for Farmer ("R/W own row") and Master Admin ("W role/status"),
+    with Operator/Centre Admin showing R only. Implemented self-service
+    update of `full_name`/`phone`/`village_text` for **any** authenticated
+    user's own row (not Farmer-only), matching RLS-1's own framing ("a
+    user", not "a farmer") and `village_text`'s documented "nullable for
+    staff" note. The security-relevant part (role/status immutability) is
+    identical either way and fully covered by the three RLS-1 layers.
+  - Verified live against the linked project (not asserted): all 7 tables
+    exist with `relrowsecurity = true`; 25 policies present, matching the
+    per-table matrix exactly (`profiles` correctly has no INSERT/DELETE
+    policy — rows are created only by the owner-run auth trigger and are
+    never deleted, per "suspension over deletion"); every FK, CHECK,
+    UNIQUE and the two documented partial indexes on `centre_assignments`
+    exist as specified; both enums have exactly the documented labels; all
+    6 functions exist with the correct `SECURITY DEFINER`/volatility
+    flags; no `booking`/`audit`/`payment`/`centre_status`/`live_state`/
+    `procurement_record`/`notification`-named table exists anywhere in
+    `public` (confirms no out-of-scope object leaked in).
+  - `tsc --noEmit`, `next lint`, `next build` all re-run and passed clean
+    (expected — no application source file touched this phase); all 19
+    routes still statically prerender.
+  - `git status` before starting: clean, `master` branch, nothing to
+    commit. No `.env*`, no unrelated application file touched — only the
+    new migration file (plus this doc).
+  - No local GitHub remote existed. Created `loltest-svg/kisansetu-sih2026`
+    (private) and pushed `master`, per explicit instruction in the same
+    message that requested this migration.
 - Phase 0 reconnaissance (repository inspection, UX4G findings, architecture
   proposal, screen map, entity map, allocation-engine input/output sketch,
   MVP scope, risks)
@@ -695,11 +772,17 @@ schema, no Supabase**)
 - Application: **scaffolded**, reusable UI shell **plus three real screen
   groups** (`/operator`, all of `/farmer/*`, all of `/admin/*`) — Next.js
   App Router, TypeScript, same 19 routes, builds and lints clean
-- Backend: **not configured** — no Supabase project, no `@supabase/*`
-  dependency, no connection, no credential. **Designed** in Phase 3A
-  (`docs/DATABASE.md`, `docs/SECURITY.md`), implemented nowhere
-- Database: **not created** — no tables, no migrations, no SQL files. The
-  logical schema exists only as design documentation
+- Backend: Supabase project `dzqddefcvnelamrfbfvo` linked; `@supabase/ssr`
+  and `@supabase/supabase-js` installed but **not yet wired into the
+  application** (no client integration, no auth flow — Migration 1 was
+  schema-only, per instruction)
+- Database: **Migration 1 applied** —
+  `supabase/migrations/20260904092326_schema_foundation.sql`. 7 tables
+  (`profiles`, `commodities`, `procurement_centres`, `centre_commodities`,
+  `centre_assignments`, `centre_operating_days`, `slots`), 2 enums, 6
+  functions, RLS enabled with 25 policies. Bookings, queue, realtime,
+  payment, notifications, audit, RPCs and seed data are not built —
+  next migrations
 - UI: `/operator` (Phase 2B), all 5 `/farmer/*` routes (Phase 2C), and all
   4 `/admin/*` routes (Phase 2D) are real, UI-only screens backed by local
   demo state (`lib/demo/operatorDashboard.ts`, `lib/demo/farmerDashboard.ts`,
