@@ -1,0 +1,30 @@
+-- Phase 3B — Migration 4 follow-up: close a grant gap found during
+-- Migration 4's own required "verify grants" step.
+--
+-- public.recompute_centre_live_state(uuid, date) was created in the
+-- previous migration with the stated intent that no client role gets
+-- EXECUTE on it (only the maintenance triggers call it, in their own
+-- firing context). Live verification found `authenticated` could
+-- actually call it directly: Supabase's schema-level default privileges
+-- grant EXECUTE to `authenticated` on every newly created function at
+-- CREATE FUNCTION time, before that migration's own `revoke ... from
+-- public/anon` statements ran — the same root cause as the anon-EXECUTE
+-- finding closed in Migration 2, but here left `authenticated` (not just
+-- `anon`) with EXECUTE.
+--
+-- This is more than a hardening nicety: since the function is SECURITY
+-- DEFINER and writes to centre_live_state (a table with zero client
+-- write policies by design), any authenticated user could call it
+-- directly to force a write to that table for any centre/date of their
+-- choosing, bypassing the "trigger-maintained only" RLS guarantee. Not
+-- a data-forgery risk (the function only ever recomputes from real
+-- bookings/centre_status/centre_operating_days rows, never accepts
+-- attacker-supplied values), but a real "SECURITY DEFINER function used
+-- outside its intended write surface" gap, closed here rather than
+-- carried forward, per the security requirements for this migration.
+--
+-- Does not edit, rerun, or alter Migration 4's file or history — a new,
+-- additive statement only, exactly the pattern already used in Migration
+-- 2 for the equivalent anon-EXECUTE finding on the three scope helpers.
+
+revoke execute on function public.recompute_centre_live_state(uuid, date) from authenticated;

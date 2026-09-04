@@ -2,15 +2,119 @@
 
 ## CURRENT PHASE
 
-Phase 3B — Migration 3 complete (procurement_records + payment_records).
-Stopped after Migration 3 per instruction; awaiting explicit approval
-before Migration 4. **Migration 4 candidate is row 8 (`centre_live_state`)
-and it has open architectural questions that need explicit answers before
-it can be built — see "Row 8 deferred" below and the OPEN QUESTIONS
-section.**
+Phase 3B — Migration 4 complete (`centre_live_state`). OQ-16/OQ-18/OQ-19
+were locked by explicit instruction before this migration; OQ-17
+(`now_serving_token`'s exact ordering rule under concurrent multi-operator
+`IN_PROGRESS`) remains genuinely unresolved and is carried forward — the
+column exists but is deliberately always `NULL`, not guessed at. Stopped
+after Migration 4 per instruction; awaiting explicit approval before
+Migration 5/the RPC layer.
 
 ## COMPLETED
 
+- **Phase 3B — Migration 4 (`centre_live_state`):**
+  - `supabase/migrations/20260904124205_centre_live_state.sql` +
+    `supabase/migrations/20260904124459_harden_live_state_grants.sql`
+    (see "grant hardening" below). Scope: `docs/DATABASE.md` §18 row 8
+    only — `centre_live_state`, its three maintenance triggers (on
+    `bookings`, `centre_operating_days`, `centre_status`), RLS. No RPC
+    layer, no realtime publication (§18 row 13, a separate later
+    migration by design — "publish only after policies are proven").
+  - **OQ-16 (locked, applied exactly)**: `served_count` = `COMPLETED`
+    only. Verified live by walking one booking through
+    `CHECKED_IN→CALLED→IN_PROGRESS→COMPLETED` and confirming
+    `served_count` stayed `0` until the final transition, then became
+    `1` — not `1` at `CALLED`/`IN_PROGRESS` as a looser reading might have
+    produced.
+  - **OQ-18 (locked, applied exactly)**: capacity consumption =
+    every booking status except `CANCELLED`/`NO_SHOW`/`EXPIRED`
+    (`COMPLETED` still consumes; this is deliberately a *different* status
+    set than §7.6's "active" set used for the one-active-booking
+    invariant, which excludes `COMPLETED` — the two "active" concepts
+    answer different questions and are not the same set, a distinction
+    the source documents don't call out explicitly). Verified live:
+    marking a booking `NO_SHOW` moved `farmers_remaining` and
+    `quantity_remaining_quintal` up immediately, and flipped
+    `effective_status` from `FULL` back to `DELAYED` as capacity
+    reopened.
+  - **OQ-19 (locked, resolved without touching Migration 2's schema)**:
+    `centre_status` (still one row per centre, unmodified) is read only
+    when computing **today's** (Asia/Kolkata) `centre_live_state` row;
+    every other `service_date`'s row derives `effective_status` purely
+    from `is_active` + operating-day existence + that date's own
+    capacity — never from `centre_status`. Verified live against the
+    brief's own example: set `centre_status` to `PAUSED` with two
+    `centre_operating_days` rows already live (today, tomorrow) — today's
+    row became `PAUSED`, tomorrow's stayed `OPEN`, untouched (`version`
+    unchanged). This also resolves the "fan-out scope" question raised in
+    Migration 3's report: a `centre_status` change recomputes **only**
+    today's row, not every row that exists for that centre.
+  - **§6.1 precedence verified live, including the FULL-over-DELAYED
+    case**: with `centre_status = DELAYED` and 3/3 farmer slots booked,
+    `effective_status` read `FULL` (not `DELAYED`) while `delay_reason`
+    stayed populated on the row (§6.4 — the reason must not be lost even
+    when it isn't the display-winning fact). Freeing one slot (`NO_SHOW`)
+    flipped it back to `DELAYED` automatically.
+  - **OQ-17 not resolved — deliberately, per explicit instruction to STOP
+    rather than invent.** No text in the approved docs specifies which
+    token "wins" when several bookings are legitimately `IN_PROGRESS` at
+    once (`docs/DATABASE.md` §7.8 locks that several operators may each
+    serve a different farmer simultaneously). `now_serving_token` exists
+    as a column (nullable text, matching §12.1's type) and is written as
+    `NULL` by every code path in this migration — never populated by a
+    guessed rule. Verified live: with two bookings sequentially reaching
+    `IN_PROGRESS` for the same centre/date (one already `COMPLETED` by
+    the time the second started), `now_serving_token` stayed `NULL`
+    throughout every transition. **Carried forward, not silently
+    dropped** — see OPEN QUESTIONS.
+  - **A second doc contradiction found and resolved**: `docs/SECURITY.md`
+    §3's matrix restricts Operator/Centre Admin to "R own centre" on
+    `centre_live_state`, but §7 states plainly, with reasoning,
+    "`centre_live_state` is readable by all authenticated users because
+    it contains no personal data." §7's statement was taken as
+    authoritative (more specific to this table, states its reasoning, and
+    matches the already-implemented broad-read pattern on
+    `procurement_centres`/`commodities`) — also required by the
+    already-approved farmer flow (`/farmer/bookings/new`, §17) needing to
+    compare centres a farmer isn't otherwise scoped to. Implemented:
+    `centre_live_state` readable by every authenticated user, matching
+    §7 exactly; `anon` gets nothing (no policy applies to it — verified
+    live).
+  - **Grant-hardening finding, found and fixed within this same
+    migration's own required "verify grants" step, not carried
+    forward**: `recompute_centre_live_state(uuid, date)` was created with
+    the explicit intent that no client role gets `EXECUTE` on it (only
+    the maintenance triggers call it) — live verification found
+    `authenticated` could call it directly anyway, the same root cause as
+    the Migration 1 anon-EXECUTE finding (Supabase's schema-level default
+    privileges grant `EXECUTE` to `authenticated` at `CREATE FUNCTION`
+    time, before the migration's own `revoke` ran), but here more
+    serious: since the function is `SECURITY DEFINER` and writes to
+    `centre_live_state` (zero client write policies by design), any
+    authenticated user could have forced a write to that table for any
+    centre/date. Closed immediately via a second, additive migration file
+    (`20260904124459_harden_live_state_grants.sql`) rather than editing
+    the first — verified live: `has_function_privilege('authenticated',
+    ...)` now `false`. All three trigger functions
+    (`bookings_recompute_live_state`,
+    `centre_operating_days_recompute_live_state`,
+    `centre_status_recompute_live_state`) confirmed to reject direct
+    invocation structurally (`trigger functions can only be called as
+    triggers`), independent of any grant.
+  - **Adversarial + regression tests run live**, fixtures created and
+    fully deleted afterward (verified empty): broad authenticated read on
+    `centre_live_state` (PASS), `anon` denied (PASS), direct client
+    `UPDATE` on `centre_live_state` a true no-op for **every** role
+    including Master Admin (PASS — no write policy for anyone), direct
+    call to the now-hardened `recompute_centre_live_state` denied at the
+    grant layer (PASS). All 5 Migration 1-3 regression checks (cross-
+    farmer booking read denial, `profiles.role` self-promotion, both
+    booking partial-unique indexes, `request_id` uniqueness, zero write
+    policies on `bookings`/`centre_status`/`procurement_records`/
+    `payment_records`, `anon` still has no EXECUTE on the 3 original scope
+    helpers) re-verified intact.
+  - `tsc --noEmit`, `next lint`, `next build` all re-run clean; all 19
+    routes still statically prerender. No application file touched.
 - **Phase 3B — Migration 3 (procurement_records + payment_records):**
   - `supabase/migrations/20260904103232_procurement_and_payment_records.sql`.
     Scope: `docs/DATABASE.md` §18 row 9 only — the other row that became
@@ -926,18 +1030,19 @@ section.**
   and `@supabase/supabase-js` installed but **not yet wired into the
   application** (no client integration, no auth flow — Migration 1 was
   schema-only, per instruction)
-- Database: **Migrations 1, 2 and 3 applied** — 12 tables total
-  (`profiles`, `commodities`, `procurement_centres`, `centre_commodities`,
-  `centre_assignments`, `centre_operating_days`, `slots`, `centre_status`,
-  `centre_status_events`, `bookings`, `procurement_records`,
-  `payment_records`), 6 enums, 10 functions, RLS enabled on all 12 tables
-  (30 policies — 25 from Migration 1, 3 read-only from Migration 2, 2
-  read-only from Migration 3; `bookings`/`centre_status`/
-  `procurement_records`/`payment_records` have no write policy for any
-  role — RPC-only, not yet built). `centre_live_state` is next but has
-  open architectural questions (see OPEN QUESTIONS) blocking it.
-  `audit_events`, views, RPCs, realtime, the expiry sweep, and seed data
-  are not built — later migrations
+- Database: **Migrations 1-4 applied** — 13 tables total (adds
+  `centre_live_state` to Migration 3's 12), 7 enums (adds
+  `centre_effective_status`), 14 functions (adds
+  `recompute_centre_live_state` + 3 trigger functions), RLS enabled on
+  all 13 tables (31 policies — 30 through Migration 3, 1 read-all policy
+  on `centre_live_state`; still zero write policies on `bookings`/
+  `centre_status`/`procurement_records`/`payment_records`/
+  `centre_live_state` — every mutation is RPC-only or trigger-only, no
+  RPC yet built). `audit_events`, views, the RPC layer, realtime, the
+  expiry sweep, and seed data are not built — later migrations. `OQ-17`
+  (`now_serving_token` ordering under concurrent multi-operator
+  `IN_PROGRESS`) remains open and blocks nothing built so far, but should
+  be answered before any UI/RPC surfaces that field
 - UI: `/operator` (Phase 2B), all 5 `/farmer/*` routes (Phase 2C), and all
   4 `/admin/*` routes (Phase 2D) are real, UI-only screens backed by local
   demo state (`lib/demo/operatorDashboard.ts`, `lib/demo/farmerDashboard.ts`,
@@ -1089,32 +1194,32 @@ section.**
 
 ## OPEN QUESTIONS
 
-**Blocking Migration 4 (`centre_live_state`, §18 row 8) — raised during
-Migration 3, need an explicit answer before that migration is written:**
+**Still open — `centre_live_state`'s `now_serving_token`:**
 
-- `OQ-16` Does `served_count` include `NO_SHOW` bookings, or only
-  `COMPLETED`? A `NO_SHOW` booking may never have been `CHECKED_IN` (never
-  entered "the waiting set" at all), which is what §12.1's description
-  ("bookings that have left the waiting set today") is keyed to.
 - `OQ-17` When a centre has several bookings `IN_PROGRESS` simultaneously
   (§7.8, multiple operators each serving a different farmer), which one
-  is `now_serving_token`? (Candidate: most-recently-`called_at`, matching
-  "the last token a physical display announced" — not confirmed.)
-- `OQ-18` Does a `NO_SHOW` booking still consume the day's committed
-  farmer/quantity capacity (the slot was reserved and went unused), or
-  does it free the capacity back up (matching `CANCELLED`/`EXPIRED`)? §4.3
-  says `quantity_committed_quintal` sums over "active bookings," but §7.6
-  already defines "active" precisely as the farmer-invariant status set
-  (excludes `COMPLETED`) — applying that same set here would mean a
-  centre's capacity is never consumed by farmers it has already finished
-  processing, which contradicts §4.3's own description of
-  `daily_farmer_capacity` as the day's total processing throughput. The
-  two uses of "active" are not obviously the same set.
-- `OQ-19` `centre_status` is not date-scoped (one row per centre) but
-  `centre_live_state` is per `(centre_id, service_date)`. When
-  `centre_status` changes, which date(s)' `centre_live_state` row(s)
-  should recompute — today only (Asia/Kolkata), every date that already
-  has a row, or something else?
+  is `now_serving_token`? Explicitly not resolved by the Migration 4
+  brief ("if the exact ordering rule is genuinely absent... STOP and
+  report the ambiguity instead of inventing one") — genuinely absent from
+  every design doc. `centre_live_state.now_serving_token` exists as a
+  column but is always written `NULL` by Migration 4's maintenance logic;
+  no code path guesses at a value. Needs an explicit product decision
+  before it's populated or surfaced in any UI/RPC.
+
+**Resolved in Migration 4** (were blocking `centre_live_state`, §18 row 8
+— reasoning and live verification in this file's Migration 4 entry
+above):
+
+- ~~`OQ-16`~~ → **served_count = `COMPLETED` only.**
+- ~~`OQ-18`~~ → **`NO_SHOW` does not consume farmer/quantity capacity**;
+  capacity consumption = every status except `CANCELLED`/`NO_SHOW`/
+  `EXPIRED` (`COMPLETED` still consumes — a deliberately different set
+  from §7.6's "active" invariant set, which excludes `COMPLETED`).
+- ~~`OQ-19`~~ → **`centre_status` applies only to today** (Asia/Kolkata)
+  when computing `centre_live_state`; every other date derives its
+  `effective_status` purely from capacity/operating-day facts, never from
+  `centre_status`. Required no schema change to the already-applied
+  `centre_status` table.
 
 **Locked in Phase 3A.1** (were the three blocking decisions):
 
