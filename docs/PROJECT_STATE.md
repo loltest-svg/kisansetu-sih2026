@@ -2,16 +2,123 @@
 
 ## CURRENT PHASE
 
-Phase 3B — Migration 8 complete: `rpc_set_payment_status`, the final
-function in `docs/DATABASE.md` §18 row 12's RPC layer. Every core
-table (`bookings`, `centre_status`, `procurement_records`,
-`payment_records`) now has a real, working, audited, RPC-only write
-path. `OQ-17` remains untouched. Stopped after Migration 8 per
-instruction; awaiting explicit approval before Migration 9 or any UI/
-application integration.
+Phase 3B — Migration 9 complete: `v_centre_availability` and
+`v_centre_daily_summary` (§18 row 11). `v_centre_daily_summary` ships
+with `avg_wait`/`peak_concurrent_waiting` only — `uptime` was flagged as
+genuinely undefined in the docs (no formula, no agreed baseline window)
+and, per explicit decision, deferred to a later migration rather than
+guessed. Two real defects were found during this migration's own
+required verification steps and fixed with additive follow-up migrations
+before this phase could be called complete (see below) — neither
+required editing an already-applied migration file. `OQ-17` untouched.
+Stopped after Migration 9 per instruction; row 13 (realtime), row 14
+(the expiry sweep's actual schedule), and row 15 (seed data) all remain
+unbuilt, awaiting explicit approval and, for row 14, a mechanism decision
+(`pg_cron` vs. an application-level cron route) not yet made.
 
 ## COMPLETED
 
+- **Phase 3B — Migration 9 (`v_centre_availability`, `v_centre_daily_summary`):**
+  - `supabase/migrations/20260904160614_availability_views.sql`, plus
+    two same-session follow-ups:
+    `20260904160922_harden_availability_view_grants.sql` and
+    `20260904161128_fix_view_delay_estimate_rounding.sql`. No new table,
+    RPC, trigger, or policy — pure read-only views over already-verified
+    tables. Verified live: function count unchanged (35), policy count
+    unchanged (33), no realtime publication entries, no `pg_cron`
+    extension — confirming rows 13/14/15 were not pulled in.
+  - **Ambiguity flagged and resolved by explicit decision before writing
+    SQL**: `v_centre_daily_summary`'s `uptime` column has no formula
+    anywhere in the docs, and a real product question (does `PAUSED`
+    count as downtime the same as `CLOSED`? what's the baseline window?)
+    — omitted from this migration per your explicit choice, to be added
+    once defined. `avg_wait` uses §13's exact given formula
+    (`avg(called_at − checked_in_at)`) verbatim; `peak_concurrent_waiting`
+    has no formula either but was implemented anyway (not held back the
+    same way `uptime` was) because it has a direct, internally-consistent
+    reading available — a timeline reconstruction using the exact same
+    `CHECKED_IN` "waiting" window already locked for
+    `centre_live_state.waiting_count` (Migration 4) — flagged here as an
+    interpretation, not a documented fact.
+  - **Deliberate design point, documented and verified live, not just
+    asserted**: both views run with the *owning* role's privileges, not
+    the querying user's (PostgreSQL's `security_invoker` view option was
+    deliberately left unset — its default is `false`). This is required,
+    not a weakening: both views aggregate across *all* bookings at a
+    centre, and a farmer's own `bookings` RLS policy (own rows only)
+    would otherwise filter every other farmer's row out **before** the
+    aggregate functions ever saw them, silently returning wrong,
+    under-counted numbers — the identical trap §7.3 already documents
+    for window functions, applying equally to `COUNT`/`SUM`. Verified
+    live as the primary test: querying `v_centre_availability` as a
+    Farmer who owns only 1 of 2 bookings at a centre, an Operator, a
+    Centre Admin at that centre, a Centre Admin at a *different* centre,
+    and Master Admin all returned the **identical, true** centre-wide
+    numbers (`farmers_booked=2`, `farmers_processed=1`, etc.) — not five
+    different RLS-filtered answers. Safe because both views' entire
+    column list is centre+date-level aggregates only (capacities,
+    counts, percentages, a derived status) — no booking id, no farmer
+    id, no name, no phone anywhere — the same "no personal data, safe
+    for any authenticated user" analysis already applied to
+    `centre_live_state` (§7, S-13).
+  - **Grant gap found during this migration's own required
+    grants-verification step, fixed via an additive follow-up
+    migration**: despite an in-migration `REVOKE ALL; GRANT SELECT`
+    issued immediately after each `CREATE VIEW`, live verification found
+    `authenticated` still held `INSERT`/`UPDATE`/`DELETE`/`TRUNCATE`/
+    `REFERENCES`/`TRIGGER` on both views — the same root cause already
+    seen for function `EXECUTE` in Migrations 1/4/5: Supabase's
+    schema-level default-privilege mechanism grants broadly to
+    `authenticated` on every new relation at a point no in-migration
+    revoke can preempt; only a follow-up revoke, issued after the object
+    fully exists, reliably sticks (confirmed by testing a manual
+    post-hoc revoke, which took effect immediately). **Confirmed not
+    exploitable regardless**: both views use CTEs/joins/aggregates, so
+    PostgreSQL refuses `INSERT`/`UPDATE`/`DELETE` against them
+    structurally ("Views containing WITH are not automatically
+    updatable") — verified live by attempting all three — independent of
+    any grant. Closed anyway, for the same minimal-surface reason the
+    earlier `EXECUTE` gaps were closed, and because grants that are
+    merely inert today would become a real path the moment anyone adds
+    an `INSTEAD OF` trigger later.
+  - **Real arithmetic defect found during row-level testing, fixed via a
+    second additive follow-up**: `estimated_delay_minutes` used
+    `ceil(farmers_waiting / rate * 60)`. PostgreSQL's `numeric` division
+    truncates to a fixed internal scale rather than computing exactly, so
+    an evenly-divisible case (1 farmer waiting / 6 per hour × 60 minutes,
+    exactly 10) computed as `10.00000000000000000020`, and `ceil()` on
+    that tiny positive remainder rounded up to 11 — caught by comparing
+    the view's live output against a hand-computed expected value, not
+    assumed correct. Fixed by rounding to 4 decimal places before
+    ceiling (absorbs the precision noise on exact cases; genuinely
+    fractional cases like 1/7×60 = 8.571… → 9 are unaffected) via
+    `CREATE OR REPLACE VIEW` (permitted since the column's name/position/
+    type were unchanged) — verified live: the same fixture now correctly
+    returns 10, and grants were confirmed unchanged by the replace.
+  - **Row-level correctness independently verified against hand-computed
+    expected values**, not just "the query ran": a fixture with one
+    `CHECKED_IN` booking, one `COMPLETED` booking (with a
+    `procurement_records` row), and known capacity numbers produced
+    `farmers_booked=2`, `farmers_processed=1`, `farmers_waiting=1`,
+    `farmers_remaining=3`, `farmer_utilisation_pct=40.0`,
+    `quantity_committed_quintal=18`, `quantity_procured_quintal=7.5`,
+    `quantity_remaining_quintal=82`, `quantity_utilisation_pct=18.0`,
+    `estimated_delay_minutes=10`, `effective_status=OPEN` — every one
+    matching the hand-computed expectation exactly.
+    `peak_concurrent_waiting` verified at both `1` and, after adding an
+    overlapping check-in window, `2`.
+  - **`anon` denied on both views** (`permission denied for view`,
+    confirmed live for each); a centre with no `centre_operating_days`
+    row produces zero view rows for it (no fabricated data for
+    unconfigured dates).
+  - **Regression-tested all 8 prior-migration invariants**: cross-farmer
+    booking read denial, `profiles.role` self-promotion, `rpc_set_payment_status`
+    authorization unchanged (operator correctly still denied),
+    `rpc_create_booking`'s active-booking invariant re-verified (correctly
+    blocked a second booking for an already-active farmer), `anon`
+    denied `EXECUTE` on the helper/RPC surface. All intact.
+  - `tsc --noEmit`, `next lint`, `next build` all re-run clean; all 19
+    routes still statically prerender. No application file touched.
 - **Phase 3B — Migration 8 (`rpc_set_payment_status`):**
   - `supabase/migrations/20260904141540_rpc_set_payment_status.sql`. One
     RPC, exactly as approved. No new tables/enums/RLS policies —
@@ -1311,19 +1418,23 @@ application integration.
   and `@supabase/supabase-js` installed but **not yet wired into the
   application** (no client integration, no auth flow — Migration 1 was
   schema-only, per instruction)
-- Database: **Migrations 1-8 applied** — 14 tables (unchanged since
-  Migration 6 — Migrations 6/7/8 all add functions only, no new table),
-  7 enums, 35 functions (Migration 8 adds `rpc_set_payment_status` and
-  extends `audit_payment_records` in place via `CREATE OR REPLACE`, plus
-  a `CREATE OR REPLACE TRIGGER` widening it from `AFTER UPDATE` to
-  `AFTER INSERT OR UPDATE`), RLS unchanged at 33 policies. **All four
-  core mutable tables — `bookings`, `centre_status`, `procurement_records`,
-  `payment_records` — now have a real, working, audited, RPC-only client
-  write path.** The full §18 row-12 RPC layer scoped for Phase 3B is
-  complete. Still no direct table write for any client role anywhere.
-  `OQ-17` (`now_serving_token` ordering under concurrent multi-operator
+- Database: **Migrations 1-9 applied** — 14 tables + **2 views**
+  (`v_centre_availability`, `v_centre_daily_summary`; Migration 9 added
+  no new table), 7 enums, 35 functions (unchanged — Migration 9 added no
+  function, only views), RLS unchanged at 33 policies (views aren't
+  RLS-eligible objects; their own `SELECT`-only grant to `authenticated`
+  is the equivalent boundary, verified live). **All four core mutable
+  tables — `bookings`, `centre_status`, `procurement_records`,
+  `payment_records` — have a real, working, audited, RPC-only client
+  write path**, and the two read-side views now back the five screens/
+  the allocation engine's documented data needs (§13/§15). Still no
+  direct table/view write for any client role anywhere. `OQ-17`
+  (`now_serving_token` ordering under concurrent multi-operator
   `IN_PROGRESS`) remains open; not populated, returned, or depended on
-  anywhere through Migration 8
+  anywhere through Migration 9. `v_centre_daily_summary.uptime` remains
+  unbuilt — no formula/baseline defined yet, deferred by explicit
+  decision, not guessed. Rows 13 (realtime), 14 (expiry-sweep schedule),
+  15 (seed data) all remain unbuilt
 - UI: `/operator` (Phase 2B), all 5 `/farmer/*` routes (Phase 2C), and all
   4 `/admin/*` routes (Phase 2D) are real, UI-only screens backed by local
   demo state (`lib/demo/operatorDashboard.ts`, `lib/demo/farmerDashboard.ts`,
