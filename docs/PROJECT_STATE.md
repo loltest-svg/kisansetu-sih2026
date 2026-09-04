@@ -2,20 +2,86 @@
 
 ## CURRENT PHASE
 
-Phase 3B — Migration 6 complete: the approved RPC subset
-(`rpc_create_booking`, `rpc_expire_stale_bookings`,
-`rpc_get_my_queue_position`, `rpc_check_in`, `rpc_call_next_farmer`,
-`rpc_set_centre_status`). This is the first migration where a client
-(farmer/operator) can actually write data — `bookings`/`centre_status`
-now have a real, working, audited write path for the first time; every
-prior migration's "documented dependency, not built yet" note for these
-two tables is now closed. `OQ-17` remains open, untouched by this
-migration. Quality/weighment/procurement/payment RPCs remain deferred to
-a later migration, per instruction. Stopped after Migration 6 per
-instruction; awaiting explicit approval before Migration 7.
+Phase 3B — Migration 7 complete: the procurement processing RPC trio
+(`rpc_record_quality`, `rpc_record_weighment`, `rpc_complete_procurement`).
+All six previously-flagged planning questions were locked by explicit
+instruction before this migration (REJECTED-quality handling, enforced
+workflow order, atomic completion, payment untouched, tightened
+per-booking Operator authorization, extended audit coverage) — nothing
+guessed. `OQ-17` untouched. Stopped after Migration 7 per instruction;
+`rpc_set_payment_status` (Migration 8) remains unbuilt, deferred as
+planned.
 
 ## COMPLETED
 
+- **Phase 3B — Migration 7 (procurement processing RPC trio):**
+  - `supabase/migrations/20260904140009_rpc_procurement_processing.sql`.
+    Three RPCs plus one internal shared authorization helper
+    (`can_process_booking`, granted to no one — reachable only from
+    within the other `SECURITY DEFINER` functions) plus one additive
+    `CREATE OR REPLACE` on the already-applied `audit_procurement_records()`
+    trigger (Migration 5) to add two new audit branches. No new tables,
+    enums, or RLS policies — verified live: policy count per table
+    (`bookings`, `procurement_records`, `payment_records`, `centre_status`
+    all still exactly 1, unchanged).
+  - **Tightened authorization, verified live as the primary adversarial
+    test**: Centre Admin at the booking's centre, **or** the specific
+    Operator who is that booking's `processing_operator_id` (plus a
+    defense-in-depth re-check that they're still assigned to the centre,
+    in case their assignment was revoked mid-processing) — an
+    *unassigned* Operator at the same centre is denied, confirmed live
+    across all three RPCs. Master Admin and Farmer also confirmed denied
+    on all three.
+  - **Enforced workflow order verified live**: weighment before quality
+    rejected (`quality must be recorded before weighment`); completion
+    before weighment rejected (`weighment must be recorded before
+    completing procurement`).
+  - **REJECTED-quality handling verified live exactly as locked**:
+    `REJECTED` quality recorded successfully; a weighment attempt with
+    non-zero `accepted_quantity_quintal` on a `REJECTED` lot rejected
+    with a clean error; the same call with `0` succeeded; completion of
+    a `REJECTED` lot **succeeded** (booking reached `COMPLETED`),
+    confirming rejection does not block the appointment from finishing.
+  - **Atomic completion**: `rpc_complete_procurement` updates
+    `procurement_records.procured_at`/`procured_by` and
+    `bookings.status`/`completed_at` as plain sequential statements with
+    no exception-swallowing between them — a failure anywhere aborts the
+    whole call. The happy-path completion (quality → weighment →
+    completion) succeeded cleanly end to end; the already-tested
+    "completion before weighment" rejection is itself the strongest
+    available live evidence of no-partial-write, since neither table
+    shows any trace of a partial attempt afterward.
+  - **`payment_records` confirmed completely untouched**: live count 0
+    throughout, exactly 1 RLS policy (unchanged), both of its Migration 3
+    triggers present and unmodified. No RPC in this migration reads,
+    writes, or references it.
+  - **Audit extended, not duplicated — verified live**: the existing
+    `PROCUREMENT_COMPLETED` branch copied verbatim from the live
+    definition before editing (confirmed byte-for-byte via
+    `pg_get_functiondef` before writing the migration); two new branches
+    (`QUALITY_RECORDED`, `WEIGHMENT_RECORDED`) added using the identical
+    proven "newly set" pattern. A full quality→weighment→completion
+    sequence for two bookings produced **exactly one** row per transition
+    per booking (`QUALITY_RECORDED` ×1, `WEIGHMENT_RECORDED` ×1,
+    `PROCUREMENT_COMPLETED` ×1, `BOOKING_COMPLETED` ×1 — no duplicates),
+    each correctly attributed to the real calling operator via
+    `auth.uid()`. Audit stays entirely trigger-driven — none of the three
+    RPCs calls `write_audit_event` directly, matching §16.
+  - **`centre_live_state` cascade confirmed correct**: after two
+    bookings reached `COMPLETED`, `served_count = 2` (`OQ-16`) and
+    `farmers_remaining` unchanged from their `IN_PROGRESS` values
+    (`COMPLETED` still consumes capacity, `OQ-18`) — no RPC in this
+    migration reads `centre_live_state` for any decision; it is only
+    ever a downstream effect via the existing Migration 4 trigger.
+  - **Regression-tested all 6 prior-migration invariants**: cross-farmer
+    booking read denial, `profiles.role` self-promotion, cross-centre
+    `audit_events` isolation, `rpc_create_booking` idempotency + the
+    active-booking invariant (both re-verified through a fresh booking),
+    `rpc_expire_stale_bookings` still denied to `authenticated`, `anon`
+    denied `EXECUTE` on every helper/RPC checked including all 4 new
+    Migration 7 functions. All intact.
+  - `tsc --noEmit`, `next lint`, `next build` all re-run clean; all 19
+    routes still statically prerender. No application file touched.
 - **Phase 3B — Migration 6 (RPC layer, approved subset):**
   - `supabase/migrations/20260904131335_rpc_booking_queue_status.sql`.
     Six functions only, exactly as approved:
@@ -1191,18 +1257,19 @@ instruction; awaiting explicit approval before Migration 7.
   and `@supabase/supabase-js` installed but **not yet wired into the
   application** (no client integration, no auth flow — Migration 1 was
   schema-only, per instruction)
-- Database: **Migrations 1-6 applied** — 14 tables (unchanged this
-  migration — Migration 6 adds functions only, no new table), 7 enums,
-  28 functions (adds the 6 RPCs), RLS unchanged at 32 policies.
-  **`bookings` and `centre_status` now have a real, working, audited
-  client write path** via `rpc_create_booking`/`rpc_check_in`/
-  `rpc_call_next_farmer`/`rpc_set_centre_status` — the first tables in
-  this schema clients can actually mutate. Still no direct table write
-  for any client role anywhere (RPC-only, as designed). Quality/
-  weighment/procurement/payment RPCs, views, realtime, and seed data are
-  not built — later migrations. `OQ-17` (`now_serving_token` ordering
-  under concurrent multi-operator `IN_PROGRESS`) remains open; not
-  populated, returned, or depended on anywhere in Migration 6
+- Database: **Migrations 1-7 applied** — 14 tables (unchanged since
+  Migration 6 — Migrations 6 and 7 both add functions only, no new
+  table), 7 enums, 33 functions (Migration 7 adds `can_process_booking`,
+  `rpc_record_quality`, `rpc_record_weighment`,
+  `rpc_complete_procurement`, and extends `audit_procurement_records`
+  in place via `CREATE OR REPLACE`), RLS unchanged at 33 policies.
+  **`bookings`/`centre_status`/`procurement_records` now all have a
+  real, working, audited client write path**; `payment_records` remains
+  the one core table with none yet (`rpc_set_payment_status`, Migration
+  8, not built). Still no direct table write for any client role
+  anywhere (RPC-only, as designed). `OQ-17` (`now_serving_token`
+  ordering under concurrent multi-operator `IN_PROGRESS`) remains open;
+  not populated, returned, or depended on anywhere through Migration 7
 - UI: `/operator` (Phase 2B), all 5 `/farmer/*` routes (Phase 2C), and all
   4 `/admin/*` routes (Phase 2D) are real, UI-only screens backed by local
   demo state (`lib/demo/operatorDashboard.ts`, `lib/demo/farmerDashboard.ts`,
