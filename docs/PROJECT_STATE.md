@@ -2,12 +2,81 @@
 
 ## CURRENT PHASE
 
-Phase 3B — Migration 2 complete (centre operations foundation + bookings
-transaction spine). Stopped after Migration 2 per instruction; awaiting
-explicit approval before Migration 3.
+Phase 3B — Migration 3 complete (procurement_records + payment_records).
+Stopped after Migration 3 per instruction; awaiting explicit approval
+before Migration 4. **Migration 4 candidate is row 8 (`centre_live_state`)
+and it has open architectural questions that need explicit answers before
+it can be built — see "Row 8 deferred" below and the OPEN QUESTIONS
+section.**
 
 ## COMPLETED
 
+- **Phase 3B — Migration 3 (procurement_records + payment_records):**
+  - `supabase/migrations/20260904103232_procurement_and_payment_records.sql`.
+    Scope: `docs/DATABASE.md` §18 row 9 only — the other row that became
+    ready after Migration 2 (row 8, `centre_live_state`) was evaluated and
+    explicitly deferred, not silently skipped.
+  - **Row 8 deferred — real, unresolved architectural questions, not
+    guessed past.** `centre_live_state`'s dependency (bookings) is
+    satisfied, but §12.1 specifies its columns' *intent* in one line each,
+    not their exact SQL semantics, and several of those are product
+    decisions this migration must not invent:
+    1. `served_count` ("bookings that have left the waiting set today") —
+       does `NO_SHOW` count, given a `NO_SHOW` booking may never have been
+       `CHECKED_IN` (never entered the waiting set) at all?
+    2. `now_serving_token` — a single token, but §7.8 locks that several
+       bookings can be `IN_PROGRESS` at once (several operators, each
+       serving a different farmer). Which token "wins" isn't specified.
+    3. `farmers_remaining` / `quantity_remaining_quintal` — whether a
+       `NO_SHOW` booking still consumes the day's committed capacity (slot
+       was reserved, went unused) or frees it (matching `CANCELLED`/
+       `EXPIRED`). §4.3 reuses the word "active" for this, but §7.6
+       already gives "active" a precise, *different* meaning (the
+       farmer-invariant status set, which excludes `COMPLETED`) — applying
+       that definition here would make a centre's capacity un-consumed by
+       farmers it already finished processing, contradicting §4.3's own
+       description of `daily_farmer_capacity`. The document doesn't flag
+       that these are two different "active" sets.
+    4. Fan-out scope when `centre_status` changes: it's not date-scoped
+       (one row per centre) but `centre_live_state` is per
+       `(centre_id, service_date)` — "today only" vs. "every date with an
+       existing row" vs. something else isn't specified.
+    Recorded as open questions (below) rather than resolved by
+    assumption, because getting any of these wrong ships incorrect
+    farmer/operator-facing numbers silently — a different risk profile
+    than the narrow, either-way-safe judgment calls made resolving the
+    Migration 2 RLS-2 ambiguity.
+  - `procurement_records` and `payment_records` built exactly per
+    `docs/DATABASE.md` §8.1/§10.1: 1:1 with `bookings`, the
+    `accepted_quantity_quintal <= gross_weight_quintal` check, and the
+    payment transition-guard trigger (`docs/SECURITY.md` C-6: `PAID` is
+    terminal except a Master-Admin correction to `FAILED`; `PAID ->
+    PENDING` rejected). No new RLS ambiguity to resolve — `docs/SECURITY.md`
+    §RLS-2 already names "quality/weighment/procurement recording" and
+    "payment status change" explicitly in its RPC-only list, so both
+    tables ship read-only (same pattern as `bookings`/`centre_status` in
+    Migration 2), consistently across every role's matrix cell this time.
+  - **Adversarial tests run live** with disposable fixtures (created and
+    fully deleted afterward, verified empty): cross-farmer and
+    cross-centre read denial on both tables; direct client `INSERT` on
+    `procurement_records` (RLS violation); direct client `UPDATE` on
+    `payment_records` blocked by RLS for **every** role including Master
+    Admin (a true no-op, confirmed via `RETURNING`) — matching the
+    RPC-only design; an oracle-style probe (a farmer's own real booking id
+    vs. a random uuid against `procurement_records` returned identically
+    empty results, no differentiated error); and the payment
+    transition-guard trigger's internal logic tested directly in a
+    privileged bypass context simulating the future RPC (`PENDING->PAID`
+    succeeds; `PAID->PENDING` regression rejected; `PAID->FAILED` succeeds
+    only with a Master-Admin identity, rejected otherwise).
+  - **Regression-tested all 8 Migration 1/2 invariants** after applying:
+    `anon` still has no EXECUTE on the 3 scope helpers; `profiles.role`
+    self-promotion still blocked at the grant layer; both booking partial
+    unique indexes and `request_id` uniqueness still present; `bookings`/
+    `centre_status` still carry zero write policies. All intact —
+    Migration 3 touched no Migration 1/2 object.
+  - `tsc --noEmit`, `next lint`, `next build` all re-run clean; all 19
+    routes still statically prerender. No application file touched.
 - **Phase 3B — Migration 2 (centre_status + bookings):**
   - `supabase/migrations/20260904101623_centre_status_and_bookings.sql`.
     Scope: `docs/DATABASE.md` §18 row 5 (`centre_status`,
@@ -857,16 +926,18 @@ explicit approval before Migration 3.
   and `@supabase/supabase-js` installed but **not yet wired into the
   application** (no client integration, no auth flow — Migration 1 was
   schema-only, per instruction)
-- Database: **Migrations 1 and 2 applied** — 10 tables total
+- Database: **Migrations 1, 2 and 3 applied** — 12 tables total
   (`profiles`, `commodities`, `procurement_centres`, `centre_commodities`,
   `centre_assignments`, `centre_operating_days`, `slots`, `centre_status`,
-  `centre_status_events`, `bookings`), 4 enums, 9 functions, RLS enabled
-  on all 10 tables (28 policies — 25 from Migration 1, 3 read-only from
-  Migration 2; `bookings`/`centre_status`/`centre_status_events` have no
-  write policy for any role — RPC-only, not yet built). `centre_live_state`,
-  `procurement_records`/`payment_records`, `audit_events`, views, RPCs,
-  realtime, the expiry sweep, and seed data are not built — next
-  migrations
+  `centre_status_events`, `bookings`, `procurement_records`,
+  `payment_records`), 6 enums, 10 functions, RLS enabled on all 12 tables
+  (30 policies — 25 from Migration 1, 3 read-only from Migration 2, 2
+  read-only from Migration 3; `bookings`/`centre_status`/
+  `procurement_records`/`payment_records` have no write policy for any
+  role — RPC-only, not yet built). `centre_live_state` is next but has
+  open architectural questions (see OPEN QUESTIONS) blocking it.
+  `audit_events`, views, RPCs, realtime, the expiry sweep, and seed data
+  are not built — later migrations
 - UI: `/operator` (Phase 2B), all 5 `/farmer/*` routes (Phase 2C), and all
   4 `/admin/*` routes (Phase 2D) are real, UI-only screens backed by local
   demo state (`lib/demo/operatorDashboard.ts`, `lib/demo/farmerDashboard.ts`,
@@ -1017,6 +1088,33 @@ explicit approval before Migration 3.
   avoided duplicating an existing generic component — Phase 2D
 
 ## OPEN QUESTIONS
+
+**Blocking Migration 4 (`centre_live_state`, §18 row 8) — raised during
+Migration 3, need an explicit answer before that migration is written:**
+
+- `OQ-16` Does `served_count` include `NO_SHOW` bookings, or only
+  `COMPLETED`? A `NO_SHOW` booking may never have been `CHECKED_IN` (never
+  entered "the waiting set" at all), which is what §12.1's description
+  ("bookings that have left the waiting set today") is keyed to.
+- `OQ-17` When a centre has several bookings `IN_PROGRESS` simultaneously
+  (§7.8, multiple operators each serving a different farmer), which one
+  is `now_serving_token`? (Candidate: most-recently-`called_at`, matching
+  "the last token a physical display announced" — not confirmed.)
+- `OQ-18` Does a `NO_SHOW` booking still consume the day's committed
+  farmer/quantity capacity (the slot was reserved and went unused), or
+  does it free the capacity back up (matching `CANCELLED`/`EXPIRED`)? §4.3
+  says `quantity_committed_quintal` sums over "active bookings," but §7.6
+  already defines "active" precisely as the farmer-invariant status set
+  (excludes `COMPLETED`) — applying that same set here would mean a
+  centre's capacity is never consumed by farmers it has already finished
+  processing, which contradicts §4.3's own description of
+  `daily_farmer_capacity` as the day's total processing throughput. The
+  two uses of "active" are not obviously the same set.
+- `OQ-19` `centre_status` is not date-scoped (one row per centre) but
+  `centre_live_state` is per `(centre_id, service_date)`. When
+  `centre_status` changes, which date(s)' `centre_live_state` row(s)
+  should recompute — today only (Asia/Kolkata), every date that already
+  has a row, or something else?
 
 **Locked in Phase 3A.1** (were the three blocking decisions):
 
