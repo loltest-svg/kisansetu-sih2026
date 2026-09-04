@@ -987,6 +987,23 @@ Migration 1 per instruction; awaiting explicit approval before Migration 2.
 
 ## KNOWN ISSUES
 
+- **Phase 3B reconciliation audit finding: `anon` can directly `EXECUTE`
+  `auth_role()`/`auth_is_master_admin()`/`auth_centre_ids()`.** The
+  migration issued `revoke execute ... from public; grant execute ... to
+  authenticated;` on all three, intending `anon` to have none — but the
+  Supabase project's schema-level default privileges already grant
+  `EXECUTE` to `anon` at `CREATE FUNCTION` time, before those statements
+  run, and nothing in the migration revoked it from `anon` specifically.
+  Confirmed live: `pg_proc.proacl` lists `anon=X/postgres` on all three;
+  `has_function_privilege('anon', ...)` returns true. **Not a live
+  vulnerability** — verified by direct test (`SET ROLE anon; SELECT
+  auth_role();` → `NULL`, matching `auth.uid()` being `NULL` for an
+  unauthenticated caller, so no row, no PII, no cross-tenant fact is ever
+  returned) — but a deviation from the migration's own stated intent and
+  the "minimal surface" principle (`docs/SECURITY.md` §2.1). Fix is a
+  one-line `revoke execute ... from anon` in the next migration that
+  touches these functions; not applied now per the reconciliation
+  audit's "no database changes" instruction.
 - **8 MB CSS bundle is real and measured, not just documented risk.** The
   installed `ux4g-web-components@2.0.1` ships a 7.9 MB `styles/ux4g.css`
   (3.83 MB gzip) — confirms Design.md §10/§14 debt #7 directly against this

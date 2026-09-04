@@ -1046,6 +1046,24 @@ is invisible. Policies belong with their table. Realtime genuinely does go
 last — publishing a table before its policies are verified is the one
 ordering mistake that leaks data to subscribers silently.
 
+**As applied — rows 1/2/3/4/6 became one migration file.** The table
+above states a dependency order, not a one-migration-per-row mandate.
+Phase 3B's Migration 1 instruction explicitly scoped a single migration to
+"profiles, centre-related foundational tables, centre assignments,
+commodities, centre commodities, centre operating days, slots" —
+`supabase/migrations/20260904092326_schema_foundation.sql` — which is rows
+1, 2, 3, 4 and 6 above, applied together (row 5, `centre_status` +
+`centre_status_events`, was deliberately left for a later migration; it
+wasn't named in that scope). Every dependency edge in the table is still
+respected: within the file, tables are created before the helpers that
+query them, and the helpers exist before any policy that calls them —
+enforced by Postgres itself, since a `LANGUAGE SQL` function body is
+validated against real objects at `CREATE FUNCTION` time. RLS still ships
+with every table in that same migration, so the "never added later"
+property holds. Recorded here so this table isn't read as contradicting
+what was actually built; see `docs/PROJECT_STATE.md`'s Phase 3B entry for
+the full verification record.
+
 ---
 
 ## 19. Open questions and assumptions
